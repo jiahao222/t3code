@@ -24,7 +24,7 @@ import * as Scope from "../Scope.ts"
 import * as Tracer from "../Tracer.ts"
 import type * as Types from "../Types.ts"
 import * as FindMyWay from "./FindMyWay.ts"
-import { getClosingParenthensePosition, getMaxParamLengthExceeded, onFallback } from "./FindMyWay/internal/router.ts"
+import { getClosingParenthensePosition, getMaxParamLengthExceeded } from "./FindMyWay/internal/router.ts"
 import * as HttpEffect from "./HttpEffect.ts"
 import * as HttpIncomingMessage from "./HttpIncomingMessage.ts"
 import type * as HttpMethod from "./HttpMethod.ts"
@@ -33,8 +33,6 @@ import * as HttpServer from "./HttpServer.ts"
 import * as HttpServerError from "./HttpServerError.ts"
 import * as HttpServerRequest from "./HttpServerRequest.ts"
 import * as HttpServerResponse from "./HttpServerResponse.ts"
-import * as RedactedPath from "./internal/redactedPath.ts"
-import { CurrentRequestState } from "./internal/requestState.ts"
 
 const TypeId = "~effect/http/HttpRouter"
 
@@ -63,10 +61,7 @@ export interface HttpRouter {
       | HttpServerResponse.HttpServerResponse
       | Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>
       | ((request: HttpServerRequest.HttpServerRequest) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>),
-    options?: {
-      readonly uninterruptible?: boolean | undefined
-      readonly redactedParams?: ReadonlyArray<string> | undefined
-    } | undefined
+    options?: { readonly uninterruptible?: boolean | undefined } | undefined
   ) => Effect.Effect<
     void,
     never,
@@ -131,11 +126,9 @@ export const HttpRouter: Context.Service<HttpRouter, HttpRouter> = Context.Servi
 export const make = Effect.gen(function*() {
   const config = yield* RouterConfig
   const ignoreDuplicateSlashes = config.ignoreDuplicateSlashes ?? true
-  const segmentEnd = config.useSemicolonDelimiter === false ? "/?#" : "/?;#"
   const router = FindMyWay.make<{
     readonly route: Route<any, never>
     readonly prefixSegments: number | undefined
-    readonly redactedPath: RedactedPath.Template | undefined
   }>(config)
   const middleware = new Set<middleware.Fn>()
 
@@ -164,19 +157,22 @@ export const make = Effect.gen(function*() {
           route: route as Route<any, never>,
           prefixSegments: Option.isSome(route.prefix)
             ? countSegments(route.prefix.value, ignoreDuplicateSlashes)
-            : undefined,
-          redactedPath: route.redactedParams !== undefined && route.redactedParams.length > 0
-            ? RedactedPath.compile(route.path, route.redactedParams)
             : undefined
         }
         if (route.method === "*") {
-          router.all(route.path, handler)
+          if (route.path.endsWith("/*")) {
+            router.all(route.path, handler)
+            router.all(route.path.slice(0, -2) as any, handler)
+          } else {
+            router.all(route.path, handler)
+          }
         } else {
-          router.on(route.method, route.path, handler)
-        }
-        // A wildcard route also serves its bare prefix, unless that path has its own route.
-        if (route.path.endsWith("/*")) {
-          onFallback(router, route.method, (route.path.slice(0, -2) || "/") as PathInput, handler)
+          if (route.path.endsWith("/*")) {
+            router.on(route.method, route.path, handler)
+            router.on(route.method, route.path.slice(0, -2) as any, handler)
+          } else {
+            router.on(route.method, route.path, handler)
+          }
         }
       }
       return Effect.void
@@ -201,7 +197,6 @@ export const make = Effect.gen(function*() {
                 ? handler
                 : Effect.flatMap(HttpServerRequest.HttpServerRequest, handler),
               uninterruptible: options?.uninterruptible ?? false,
-              redactedParams: options?.redactedParams,
               prefix
             })
           ])
@@ -234,12 +229,12 @@ export const make = Effect.gen(function*() {
             })
           )
         }
-        const { route, prefixSegments, redactedPath } = result.handler
+        const { route, prefixSegments } = result.handler
         if (prefixSegments !== undefined) {
           context = Context.add(
             context,
             HttpServerRequest.HttpServerRequest,
-            sliceRequestUrl(request, prefixSegments, ignoreDuplicateSlashes, segmentEnd)
+            sliceRequestUrl(request, prefixSegments, ignoreDuplicateSlashes)
           )
         }
         context = Context.add(context, HttpServerRequest.ParsedSearchParams, result.searchParams)
@@ -248,16 +243,6 @@ export const make = Effect.gen(function*() {
           params: result.params
         })
 
-        if (redactedPath !== undefined) {
-          const state = Context.getOrUndefined(context, CurrentRequestState)
-          if (state !== undefined) {
-            state.redactedPath = RedactedPath.combine(
-              state.redactedPath,
-              RedactedPath.render(redactedPath, result.params),
-              request
-            )
-          }
-        }
         if (fiber.getRef(Tracer.Tracer) !== Tracer.nativeTracer) {
           const span = Context.getOrUndefined(context, Tracer.ParentSpan)
           if (span !== undefined && span._tag === "Span" && span.sampled) {
@@ -287,8 +272,7 @@ export const make = Effect.gen(function*() {
 function sliceRequestUrl(
   request: HttpServerRequest.HttpServerRequest,
   prefixSegments: number,
-  ignoreDuplicateSlashes: boolean,
-  segmentEnd: string
+  ignoreDuplicateSlashes: boolean
 ) {
   const url = request.url
   let index = 0
@@ -298,7 +282,7 @@ function sliceRequestUrl(
     } else if (url[index] === "/") {
       index++
     }
-    while (index < url.length && !segmentEnd.includes(url[index])) index++
+    while (index < url.length && !"/?;#".includes(url[index])) index++
   }
   const rest = url.slice(index)
   return request.modify({ url: rest.startsWith("/") ? rest : "/" + rest })
@@ -332,15 +316,7 @@ function countSegments(prefix: string, ignoreDuplicateSlashes: boolean) {
  * **Details**
  *
  * The value is passed to the route matcher when an `HttpRouter` is created and
- * defaults to an empty configuration. Use `FindMyWay.strictConfig` to turn
- * off path normalization and match static route text literally.
- *
- * **Gotchas**
- *
- * The router reads this reference when its layer is built, so provide it
- * outside `serve` or pass `routerConfig` to `serve` or `toWebHandler`.
- * Providing it to the app layer does not reach the router. A `routerConfig`
- * option replaces the provided value as a whole rather than merging fields.
+ * defaults to an empty configuration.
  *
  * @stability unstable
  * @category services
@@ -582,11 +558,6 @@ export const use = <A, E, R>(
 /**
  * Create a layer that adds a single route to the HTTP router.
  *
- * **Details**
- *
- * The options are the same as for `route`, including `redactedParams` for
- * path params to redact in server spans and logs.
- *
  * **Example** (Adding a GET route)
  *
  * ```ts import.meta.vitest
@@ -614,7 +585,6 @@ export const add = <E = never, R = never>(
     | ((request: HttpServerRequest.HttpServerRequest) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>),
   options?: {
     readonly uninterruptible?: boolean | undefined
-    readonly redactedParams?: ReadonlyArray<string> | undefined
   }
 ): Layer.Layer<never, never, HttpRouter | Request.From<"Requires", Exclude<R, Provided>> | Request.From<"Error", E>> =>
   use((router) => router.add(method, path, handler, options))
@@ -732,7 +702,6 @@ export interface Route<E = never, R = never> {
   readonly path: PathInput
   readonly handler: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>
   readonly uninterruptible: boolean
-  readonly redactedParams?: ReadonlyArray<string> | undefined
   readonly prefix: Option.Option<string>
 }
 
@@ -768,7 +737,6 @@ const makeRoute = <E, R>(options: {
   readonly path: PathInput
   readonly handler: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>
   readonly uninterruptible?: boolean | undefined
-  readonly redactedParams?: ReadonlyArray<string> | undefined
   readonly prefix?: Option.Option<string> | string | undefined
 }): Route<E, Exclude<R, Provided>> => (({
   ...options,
@@ -786,37 +754,6 @@ const makeRoute = <E, R>(options: {
  * function from the current request to a response effect. Set `uninterruptible` to
  * prevent the route handler from being made interruptible while it runs.
  *
- * Set `redactedParams` to the names of path params whose values are secret,
- * using `"*"` for the wildcard. When the route matches, `HttpMiddleware.tracer`
- * and `HttpMiddleware.logger` record the path with those values replaced by
- * `REDACTED`, so `/hooks/:id/:secret` records `/hooks/123/REDACTED`. Query
- * redaction is unchanged, and the handler sees the request URL as sent.
- *
- * **Gotchas**
- *
- * - Requests that never match the route are recorded as sent, including 404s,
- *   wrong-method requests and responses from global middleware such as CORS
- *   preflights. Use `HttpMiddleware.TracerDisabledWhen` or
- *   `HttpMiddleware.withLoggerDisabled` for those.
- * - Error messages and the `request` of errors raised by the handler keep the
- *   path as sent.
- * - A regex constraint with nested capture groups, or one written as a
- *   non-capturing group such as `(?:a|b)`, shifts matched values between
- *   params, so every param of that route is redacted instead.
- *
- * **Example** (Redacting a token in the path)
- *
- * ```ts
- * import { HttpRouter, HttpServerResponse } from "effect/http"
- *
- * const Asset = HttpRouter.route(
- *   "GET",
- *   "/assets/:token/*",
- *   HttpServerResponse.text("ok"),
- *   { redactedParams: ["token"] }
- * )
- * ```
- *
  * @stability unstable
  * @category routes
  * @since 4.0.0
@@ -830,7 +767,6 @@ export const route = <E = never, R = never>(
     | ((request: HttpServerRequest.HttpServerRequest) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>),
   options?: {
     readonly uninterruptible?: boolean | undefined
-    readonly redactedParams?: ReadonlyArray<string> | undefined
   }
 ): Route<E, Exclude<R, Provided>> =>
   makeRoute({
@@ -1454,7 +1390,7 @@ export const serve = <A, E, R, HE, HR = Request.Only<"Requires", R> | Request.On
     Effect.map((context) => {
       const router = Context.get(context, HttpRouter)
       const handler = router.asHttpEffect()
-      return Layer.provideMerge(
+      return Layer.merge(
         middleware ? HttpServer.serve(handler, middleware) : HttpServer.serve(handler),
         Layer.succeedContext(context)
       )

@@ -8,7 +8,6 @@ import {
   type ServerProviderSkill,
 } from "@t3tools/contracts";
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
-import { markdownMathRanges } from "@t3tools/shared/markdownMath";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import {
   ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
@@ -168,7 +167,7 @@ describe("mobile composer context", () => {
     const modelTokens = (text: string) =>
       composerContextEditorTokens(
         text,
-        collectComposerInlineTokens(text, { findMath: markdownMathRanges }),
+        collectComposerInlineTokens(text),
         new Set(),
         collectComposerModelTokens(text, known),
       )
@@ -257,7 +256,7 @@ describe("mobile composer context", () => {
     const skills = [babysit, disabled, agentOnly];
     const tokens = composerContextEditorTokens(
       text,
-      collectComposerInlineTokens(text, { findMath: markdownMathRanges }),
+      collectComposerInlineTokens(text),
       composerSkillLabels(skills),
     );
     expect(tokens.map((token) => token.source)).toEqual([
@@ -272,14 +271,14 @@ describe("mobile composer context", () => {
     expect(
       composerContextEditorTokens(
         text,
-        collectComposerInlineTokens(text, { findMath: markdownMathRanges }),
+        collectComposerInlineTokens(text),
         composerSkillLabels([]),
       ).map((token) => token.type),
     ).toEqual(["mention", "context", "context", "citation", "citation"]);
     expect(
       composerContextEditorTokens(
         text,
-        collectComposerInlineTokens(text, { findMath: markdownMathRanges }),
+        collectComposerInlineTokens(text),
         composerSkillLabels([{ ...babysit, name: "HOME" }]),
       )
         .filter((token) => token.type === "skill")
@@ -293,7 +292,7 @@ describe("mobile composer context", () => {
     expect(
       composerContextEditorTokens(
         text,
-        collectComposerInlineTokens(text, { findMath: markdownMathRanges }),
+        collectComposerInlineTokens(text),
         composerSkillLabels(promoted),
       )
         .filter((token) => token.type === "skill")
@@ -302,7 +301,7 @@ describe("mobile composer context", () => {
     expect(
       composerContextEditorTokens(
         text,
-        collectComposerInlineTokens(text, { findMath: markdownMathRanges }),
+        collectComposerInlineTokens(text),
         composerSkillLabels(skills),
       )
         .filter((token) => token.type === "skill")

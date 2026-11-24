@@ -3,7 +3,7 @@ import type {
   OrchestrationV2SearchThreadResult,
   ScopedThreadRef,
 } from "@t3tools/contracts";
-import { parseScopedThreadKey, scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   findSearchTokenRanges,
   messagePhrase,
@@ -11,7 +11,6 @@ import {
 } from "@t3tools/shared/paletteSearch";
 import { create } from "zustand";
 import type { ThemeAppearance } from "~/themePalette";
-import { rightPanelHostRef } from "../../rightPanelStore";
 import type { ThreadFindPositionReader, ThreadFindStart } from "./threadFind";
 
 export interface ThreadFindLocalSelection {
@@ -149,15 +148,9 @@ export function closeThreadFind(): void {
   useThreadFindStore.setState(CLOSED_THREAD_FIND);
 }
 
-/** Closes find if it is open in `threadKey`, leaving another thread's find alone. */
-export function closeThreadFindIn(threadKey: string): void {
-  if (useThreadFindStore.getState().threadKey === threadKey) closeThreadFind();
-}
-
 /**
  * Find belongs to the thread it was opened in: a route showing anything else
- * closes it. Settings and Usage draw over the thread, so they keep it, and a
- * side chat is shown by its parent's route while its pane is open there.
+ * closes it. Settings and Usage draw over the thread, so they keep it.
  */
 export function retainThreadFindForRoute(route: {
   readonly modalPage: boolean;
@@ -165,11 +158,8 @@ export function retainThreadFindForRoute(route: {
 }): void {
   if (route.modalPage) return;
   const { threadKey } = useThreadFindStore.getState();
-  if (threadKey === null) return;
   const shownKey = route.threadRef ? scopedThreadKey(route.threadRef) : null;
-  const findRef = parseScopedThreadKey(threadKey);
-  const hostKey = findRef ? scopedThreadKey(rightPanelHostRef(findRef)) : threadKey;
-  if (threadKey !== shownKey && hostKey !== shownKey) closeThreadFind();
+  if (threadKey !== null && threadKey !== shownKey) closeThreadFind();
 }
 
 /** Whether find is open in `thread`, as long as find is available there. */

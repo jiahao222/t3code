@@ -10,11 +10,10 @@ import { AppText } from "../../components/ui/AppText";
 import * as Dialog from "../../components/ui/Dialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { m } from "../../i18n/messages";
-import { useEnvironmentPreviewTunnelOff } from "../../state/entities";
 import { useEnvironments } from "../../state/environments";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { BrowserChrome } from "./BrowserBar";
-import { localPreviewUrlForDevice } from "./browserTabs";
+import { loopbackUrlForDevice } from "./browserTabs";
 import { TunnelWebView, type TunnelNavigation, type TunnelWebViewRef } from "./TunnelWebView";
 
 type LocalPreviewRouteScreenProps = StaticScreenProps<{
@@ -50,7 +49,6 @@ export function LocalPreviewScreen(props: {
     useEnvironments().presentationById.get(environmentId)?.entry.target.label ??
     gt("the environment", { $context: "stands in for an environment name in a sentence" });
   const { themeVariables } = useAppearancePreferences();
-  const tunnelOff = useEnvironmentPreviewTunnelOff(environmentId);
   const webView = useRef<TunnelWebViewRef>(null);
   const [requested, setRequested] = useState(initialUrl);
   const [page, setPage] = useState<TunnelNavigation | null>(null);
@@ -79,7 +77,7 @@ export function LocalPreviewScreen(props: {
   };
   const back = () => void webView.current?.goBack();
   const canGoBack = page?.canGoBack ?? false;
-  const pageColor = failed || tunnelOff || unsupported !== null ? null : page?.pageColor || null;
+  const pageColor = failed || unsupported !== null ? null : page?.pageColor || null;
 
   return (
     // Full screen spans the Duo's rail, so it insets its own sides; the pane is inset already.
@@ -129,24 +127,7 @@ export function LocalPreviewScreen(props: {
                 setFailed(true);
               }}
             />
-            {tunnelOff ? (
-              <View
-                className="absolute inset-0 items-center justify-center"
-                style={{ backgroundColor: themeVariables["--color-sheet-solid"] }}
-              >
-                <View className="w-full max-w-md">
-                  <EmptyState
-                    variant="plain"
-                    title={gt("{environment} doesn't share its localhost", {
-                      environment: environmentLabel,
-                    })}
-                    detail={gt(
-                      "The preview tunnel is off there, so its local servers only open in the streamed browser.",
-                    )}
-                  />
-                </View>
-              </View>
-            ) : unsupported !== null ? (
+            {unsupported !== null ? (
               <View
                 className="absolute inset-0 items-center justify-center"
                 style={{ backgroundColor: themeVariables["--color-sheet-solid"] }}
@@ -231,9 +212,9 @@ function hostOf(value: string): string {
   }
 }
 
-// A route URL that is not a web address opens the preview empty, ready for one to be typed.
+// The unspecified address would name the phone itself, so it becomes the environment's localhost.
 function forDevice(url: string): string {
-  return localPreviewUrlForDevice(url) ?? "";
+  return loopbackUrlForDevice(url) ?? url;
 }
 
 function normalizedOrNull(value: string): string | null {

@@ -1,7 +1,6 @@
 import type { ComponentProps, ReactNode } from "react";
 import { useCallback, useRef, useState } from "react";
 import {
-  Platform,
   Pressable,
   ScrollView,
   View,
@@ -30,8 +29,6 @@ export function ComposerInlineControl(props: {
   readonly accessibilityLabel?: string;
   readonly disabled?: boolean;
   readonly emphasized?: boolean;
-  /** The control asks for a decision; it stays usable. */
-  readonly tone?: "warning";
   readonly icon?: ComponentProps<typeof SymbolView>["name"];
   readonly renderIcon?: (size: number) => ReactNode;
   readonly label: string;
@@ -83,11 +80,7 @@ export function ComposerInlineControl(props: {
             name={props.icon}
             size={iconSize}
             tintColorClassName={
-              props.tone === "warning"
-                ? "accent-warning-foreground"
-                : props.emphasized || props.selected
-                  ? "accent-icon"
-                  : "accent-icon-muted"
+              props.emphasized || props.selected ? "accent-icon" : "accent-icon-muted"
             }
             type="monochrome"
           />
@@ -100,11 +93,7 @@ export function ComposerInlineControl(props: {
             <Text
               className={cn(
                 props.size === "large" ? "text-base font-t3-medium" : "text-sm font-t3-medium",
-                props.tone === "warning"
-                  ? "text-warning-foreground"
-                  : props.emphasized || props.selected
-                    ? "text-foreground"
-                    : "text-foreground-muted",
+                props.emphasized || props.selected ? "text-foreground" : "text-foreground-muted",
               )}
               numberOfLines={1}
               ellipsizeMode={props.labelEllipsizeMode}
@@ -376,13 +365,12 @@ export function ComposerToolbarButton(props: {
     <Pressable
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityRole="button"
-      accessibilityState={props.active === undefined ? undefined : { selected: props.active }}
       disabled={props.disabled}
       onPress={props.onPress}
       className={cn(
-        "h-[44px] max-w-[172px] flex-row items-center justify-center rounded-full border active:opacity-70 android:h-[48px]",
+        "h-11 max-w-[172px] flex-row items-center justify-center rounded-full border active:opacity-70",
         variant === "primary" && "shadow-lg shadow-adaptive-black-a10-a25 disabled:shadow-none",
-        isCircle ? "w-[44px] android:w-[48px]" : "gap-2 px-3.5 android:min-w-[48px]",
+        isCircle ? "w-11" : "gap-2 px-3.5",
         variant === "primary"
           ? props.disabled
             ? "bg-subtle-strong"
@@ -390,11 +378,11 @@ export function ComposerToolbarButton(props: {
           : variant === "danger"
             ? "bg-danger"
             : props.active
-              ? "bg-primary"
+              ? "bg-subtle-strong"
               : "bg-subtle",
         variant === "default"
           ? props.active
-            ? "border-primary"
+            ? "border-border"
             : "border-border-subtle"
           : variant === "danger"
             ? "border-danger-border"
@@ -406,10 +394,7 @@ export function ComposerToolbarButton(props: {
       style={({ pressed }) => [
         {
           maxWidth: props.maxWidth,
-          minWidth:
-            Platform.OS === "android" && props.minWidth !== undefined
-              ? Math.max(48, props.minWidth)
-              : props.minWidth,
+          minWidth: props.minWidth,
           opacity: props.disabled ? 0.55 : pressed ? 0.72 : 1,
         },
         props.style,
@@ -433,9 +418,7 @@ export function ComposerToolbarButton(props: {
               ? props.disabled
                 ? "text-foreground-muted"
                 : "text-primary-foreground"
-              : props.active
-                ? "text-primary-foreground"
-                : "text-foreground",
+              : "text-foreground",
           )}
           ellipsizeMode="tail"
           numberOfLines={1}

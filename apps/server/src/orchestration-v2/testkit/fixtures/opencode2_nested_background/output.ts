@@ -44,7 +44,7 @@ export function assertOpenCode2NestedBackgroundOutput(
     (event) =>
       event.type === "run.updated" &&
       event.payload.id === projection.runs[0]?.id &&
-      event.payload.status === "completed",
+      event.payload.status === "waiting",
   );
   const grandchildDone = indexOf(
     (event) =>
@@ -52,16 +52,15 @@ export function assertOpenCode2NestedBackgroundOutput(
       event.payload.id === grandchild.id &&
       event.payload.status === "completed",
   );
-  // The run completes at turn end; its checkpoint capture settles after the grandchild.
-  const runCaptured = indexOf(
+  const runCompleted = indexOf(
     (event) =>
       event.type === "run.updated" &&
       event.payload.id === projection.runs[0]?.id &&
-      event.payload.checkpointId !== null,
+      event.payload.status === "completed",
   );
   assert.isAtLeast(rootTurnEnded, 0);
   assert.isAbove(grandchildDone, rootTurnEnded, "the thread's turn ends before the grandchild");
-  assert.isAbove(runCaptured, grandchildDone, "the run's capture waits for the grandchild");
+  assert.isAbove(runCompleted, grandchildDone, "the run waits for the grandchild");
 
   const shell = result.shellSnapshot.threads.find((thread) => thread.id === projection.thread.id);
   assert.deepEqual(shell?.pendingBackgroundTasks ?? [], []);

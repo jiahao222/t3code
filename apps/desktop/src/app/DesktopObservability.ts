@@ -349,47 +349,12 @@ const readPersistedObservabilitySettings: Effect.Effect<
     : parsePersistedServerObservabilitySettings(raw.value);
 });
 
-const resolveOtlpEndpoints = Effect.gen(function* () {
-  const otel = yield* OtelEnvironment.load;
-  if (otel.disabled) {
-    return {
-      traces: undefined,
-      metrics: undefined,
-      logs: undefined,
-      warnings: otel.warnings,
-      resourceAttributes: otel.resourceAttributes,
-    };
-  }
-
-  const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const persisted = yield* readPersistedObservabilitySettings;
-  const signalExport: SignalExport = {
-    protocol: environment.otlpProtocol,
-    headers: Option.getOrUndefined(environment.otlpHeaders),
-    exportIntervalMs: environment.otlpExportIntervalMs,
-  };
-  return {
-    traces: OtelEnvironment.resolveSignalEndpoint(
-      otel,
-      "traces",
-      { url: Option.getOrUndefined(environment.otlpTracesUrl), export: signalExport },
-      { bootstrapUrl: undefined, settingsUrl: persisted.otlpTracesUrl },
-    ),
-    metrics: OtelEnvironment.resolveSignalEndpoint(
-      otel,
-      "metrics",
-      { url: Option.getOrUndefined(environment.otlpMetricsUrl), export: signalExport },
-      { bootstrapUrl: undefined, settingsUrl: persisted.otlpMetricsUrl },
-    ),
-    logs: OtelEnvironment.resolveSignalEndpoint(
-      otel,
-      "logs",
-      { url: Option.getOrUndefined(environment.otlpLogsUrl), export: signalExport },
-      { bootstrapUrl: undefined, settingsUrl: persisted.otlpLogsUrl },
-    ),
-    warnings: otel.warnings,
-    resourceAttributes: otel.resourceAttributes,
-  };
+const resolveOtlpEndpoints = Effect.succeed({
+  traces: undefined as SignalExport & { readonly url: string; readonly export: SignalExport } | undefined,
+  metrics: undefined as SignalExport & { readonly url: string; readonly export: SignalExport } | undefined,
+  logs: undefined as SignalExport & { readonly url: string; readonly export: SignalExport } | undefined,
+  warnings: [] as ReadonlyArray<string>,
+  resourceAttributes: {} as Readonly<Record<string, string>>,
 });
 
 const writeDevelopmentConsoleOutput = (

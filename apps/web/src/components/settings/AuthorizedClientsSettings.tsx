@@ -3,7 +3,7 @@ import { m as resolveMessage } from "~/i18n/messages";
 import { managedCapabilityDenial } from "@t3tools/client-runtime/contract-labels";
 import { AUTH_SCOPE_OPTIONS as PAIRING_SCOPE_OPTIONS } from "@t3tools/shared/authScopeOptions";
 import { PlugIcon, PlusIcon, QrCodeIcon } from "lucide-react";
-import { type ReactNode, memo, useId, useRef, useState } from "react";
+import { type ReactNode, memo, useId, useState } from "react";
 import { T, useGT, useMessages } from "gt-react";
 import {
   AuthAccessWriteScope,
@@ -614,7 +614,6 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
     reportFailure: false,
   });
   const [dialogOpen, setDialogOpen] = useState(false);
-  const pairingDialogSessionRef = useRef(0);
   const [pairingLabel, setPairingLabel] = useState("");
   const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthGrantScope>>([
     ...AuthStandardClientScopes,
@@ -624,17 +623,6 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
   const relayAdminSelected = selectedScopes.includes(AuthRelayConfigureScope);
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
 
-  const handlePairingDialogOpenChange = (open: boolean) => {
-    setDialogOpen(open);
-    if (!open) {
-      pairingDialogSessionRef.current += 1;
-      setPairingLabel("");
-      setPairingScopes(
-        AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
-      );
-    }
-  };
-
   const handleCreatePairingLink = async () => {
     if (
       selectedScopes.length === 0 ||
@@ -642,7 +630,6 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
       !selectedScopes.every((scope) => readEnvironmentScope(environmentId, scope))
     )
       return;
-    const dialogSession = pairingDialogSessionRef.current;
     setIsCreatingPairingLink(true);
     const trimmedLabel = pairingLabel.trim();
     const result = await createPairingCredential({
@@ -651,9 +638,11 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
     });
     if (result._tag === "Success") {
       onPairingLinkCreated(result.value);
-      if (dialogSession === pairingDialogSessionRef.current) {
-        handlePairingDialogOpenChange(false);
-      }
+      setPairingLabel("");
+      setPairingScopes(
+        AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
+      );
+      setDialogOpen(false);
     } else if (!isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
       const message =
@@ -699,7 +688,15 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
       ) : null}
       <Dialog
         open={dialogOpen && pairingDenial === undefined}
-        onOpenChange={handlePairingDialogOpenChange}
+        onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open) {
+            setPairingLabel("");
+            setPairingScopes(
+              AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
+            );
+          }
+        }}
       >
         {pairingDenial === undefined ? (
           <DialogTrigger

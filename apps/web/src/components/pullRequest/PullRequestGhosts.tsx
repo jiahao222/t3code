@@ -1,4 +1,4 @@
-import type { PullRequestListEntry, PullRequestSummary, ScopedThreadRef } from "@t3tools/contracts";
+import type { PullRequestListEntry, PullRequestSummary } from "@t3tools/contracts";
 import {
   ArrowLeftIcon,
   ChevronRightIcon,
@@ -16,7 +16,7 @@ import {
   type ChangeRequestTerminology,
 } from "@t3tools/client-runtime/source-control-clients";
 
-import { useOpenLink } from "~/browser/useOpenLink";
+import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { RelativeTime } from "~/components/RelativeTime";
 
@@ -93,7 +93,6 @@ export function PullRequestDetailGhost({
   onBack,
   onClose,
   onCheckoutError,
-  threadRef = null,
 }: {
   seed?: PullRequestListEntry | null;
   summary?: PullRequestSummary | null;
@@ -105,11 +104,9 @@ export function PullRequestDetailGhost({
   onBack?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
   onCheckoutError?: ((error: Error) => void) | undefined;
-  threadRef?: ScopedThreadRef | null | undefined;
 }) {
   const gt = useGT();
   const resolve = useMessages();
-  const openLink = useOpenLink(threadRef);
   const tabs = requestedTabs ?? resolveFilterOptions(DEFAULT_DETAIL_TABS, resolve);
   const seed = summary
     ? {
@@ -168,10 +165,7 @@ export function PullRequestDetailGhost({
               <>
                 <span className="min-w-0 truncate font-medium">{seed.repository}</span>
                 <InlineButton
-                  onClick={(event) => void openLink(seed.url, { event }).catch(console.error)}
-                  onAuxClick={(event) => {
-                    if (event.button === 1) void openLink(seed.url, { event }).catch(console.error);
-                  }}
+                  onClick={() => void readLocalApi()?.shell.openExternal(seed.url)}
                   aria-label={gt(
                     "Open {term, select, mr {merge request} cr {change request} other {pull request}} #{number} on host",
                     {
@@ -357,11 +351,7 @@ export function PullRequestDetailGhost({
         </PullRequestDetailTabBar>
       </div>
 
-      <div
-        tabIndex={-1}
-        data-workspace-focus-default
-        className="min-h-0 flex-1 overflow-hidden outline-none"
-      >
+      <div className="min-h-0 flex-1 overflow-hidden">
         <section className="px-4 pt-2.5 pb-1">
           <div className="space-y-2">
             <div className="grid min-h-7 min-w-0 grid-cols-[6rem_minmax(0,1fr)] items-center gap-2 text-xs sm:min-h-6">

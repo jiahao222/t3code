@@ -12,7 +12,6 @@
  */
 import { dual } from "./Function.ts"
 import type { TypeLambda } from "./HKT.ts"
-import * as InternalRecord from "./internal/record.ts"
 import * as Reducer from "./Reducer.ts"
 
 /**
@@ -648,13 +647,11 @@ export {
  *
  * **Details**
  *
- * Uses only own enumerable string and symbol properties of `fields` to define
- * comparisons. Non-enumerable and inherited definitions are ignored. Selected
- * properties on the compared values may be non-enumerable or inherited;
- * other properties of those values are ignored. The result returns `true`
- * only if all selected properties are equivalent according to their equivalences.
- * The resulting equivalence satisfies reflexive, symmetric, and transitive
- * properties.
+ * Compares only the properties specified in the struct definition; other
+ * properties are ignored. String and symbol keys are supported via
+ * `Reflect.ownKeys`. The result returns `true` only if all specified properties
+ * are equivalent according to their equivalences, and it also satisfies
+ * reflexive, symmetric, and transitive properties.
  *
  * **Example** (Comparing structs with different equivalences per field)
  *
@@ -709,10 +706,10 @@ export {
  * @category combinators
  * @since 4.0.0
  */
-export function Struct<R extends Record<PropertyKey, Equivalence<any>>>(
+export function Struct<R extends Record<string, Equivalence<any>>>(
   fields: R
 ): Equivalence<{ readonly [K in keyof R]: [R[K]] extends [Equivalence<infer A>] ? A : never }> {
-  const keys = InternalRecord.ownEnumerableKeys(fields) as Array<keyof R>
+  const keys: Array<any> = Reflect.ownKeys(fields)
   return make((self, that) => {
     for (const key of keys) {
       if (!fields[key](self[key], that[key])) return false
@@ -731,10 +728,10 @@ export function Struct<R extends Record<PropertyKey, Equivalence<any>>>(
  *
  * **Details**
  *
- * - Compares own enumerable properties present in both objects
- * - Requires both objects to have the same set of enumerable keys; different keys result in `false`
+ * - Compares all properties present in both objects
+ * - Requires both objects to have the same set of keys; different keys result in `false`
  * - All property values must be equivalent according to the provided equivalence
- * - Supports both string and symbol keys; non-enumerable and inherited properties are ignored
+ * - Supports both string and symbol keys via `Reflect.ownKeys`
  * - Empty objects are considered equivalent
  * - The result is also an equivalence that satisfies reflexive, symmetric, and transitive properties
  *
@@ -776,13 +773,13 @@ export function Struct<R extends Record<PropertyKey, Equivalence<any>>>(
  */
 export function Record<A>(value: Equivalence<A>): Equivalence<Record<PropertyKey, A>> {
   return make((self, that) => {
-    const selfKeys = InternalRecord.ownEnumerableKeys(self)
-    const thatKeys = InternalRecord.ownEnumerableKeys(that)
+    const selfKeys = Reflect.ownKeys(self)
+    const thatKeys = Reflect.ownKeys(that)
 
     if (selfKeys.length !== thatKeys.length) return false
 
     for (const key of selfKeys) {
-      if (!Object.prototype.propertyIsEnumerable.call(that, key) || !value(self[key], that[key])) {
+      if (!Object.hasOwn(that, key) || !value(self[key], that[key])) {
         return false
       }
     }

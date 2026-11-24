@@ -1084,8 +1084,8 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRows[1]?.showAssistantCopyButton).toBe(true);
   });
 
-  it("rewinds the first visible run to thread start after a rewind", () => {
-    const checkpoint = {
+  it("projects assistant diffs and rewinds the first visible run to thread start after a rewind", () => {
+    const assistantTurnDiffSummary = {
       runId: "turn-1" as never,
       completedAt: "2026-01-01T00:00:30Z",
       assistantMessageId: "assistant-1" as never,
@@ -1129,7 +1129,7 @@ describe("deriveMessagesTimelineRows", () => {
       ],
       isWorking: false,
       activeTurnStartedAt: null,
-      turnDiffSummaries: [checkpoint],
+      turnDiffSummaries: [assistantTurnDiffSummary],
       supportsConversationRollback: true,
       threadStartCheckpointAvailable: true,
     });
@@ -1138,7 +1138,13 @@ describe("deriveMessagesTimelineRows", () => {
       (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
         row.kind === "message" && row.message.role === "user",
     );
+    const assistantRow = rows.find(
+      (row): row is Extract<(typeof rows)[number], { kind: "message" }> =>
+        row.kind === "message" && row.message.role === "assistant",
+    );
+
     expect(userRow?.revertTurnCount).toBe(0);
+    expect(assistantRow?.assistantTurnDiffSummary).toBe(assistantTurnDiffSummary);
   });
 
   it("folds the first assistant message and settled work before the terminal response", () => {
@@ -1597,20 +1603,8 @@ describe("deriveMessagesTimelineRows", () => {
           message("steer", 10, "user", "steer"),
           work("work-after-steer", 15),
           message("final", 30, "assistant"),
-          {
-            kind: "event",
-            id: "late-subagent",
-            createdAt: time(50),
-            projectedItem: { item: { type: "subagent", status: "completed", runId } } as never,
-          },
         ],
-        // A later wake run is the latest, so this turn's times come from its entries.
-        latestRun: {
-          runId: RunId.make("wake-run"),
-          status: "completed",
-          startedAt: time(55),
-          completedAt: time(58),
-        },
+        latestRun: { runId, status: "completed", startedAt: time(0), completedAt: time(30) },
         isWorking: false,
         expandedRunIds,
         turnDiffSummaries: [],
@@ -1625,7 +1619,6 @@ describe("deriveMessagesTimelineRows", () => {
       "steer",
       `turn-fold:${segmentKey}`,
       "final",
-      "late-subagent",
     ]);
     expect(collapsed[1]).toMatchObject({ label: "Worked for 30s" });
     expect(collapsed[3]).toMatchObject({ label: "Continued for 20s", createdAt: time(10) });
@@ -1637,7 +1630,6 @@ describe("deriveMessagesTimelineRows", () => {
       `turn-fold:${segmentKey}`,
       "work-after-steer",
       "final",
-      "late-subagent",
     ]);
   });
 
@@ -1779,7 +1771,7 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.at(-1)).toMatchObject({ kind: "thinking" });
   });
 
-  it("does not show Thinking once the provider turn has ended or its reply is streaming", () => {
+  it("does not show Thinking once the open run's provider turn has ended", () => {
     const input = {
       timelineEntries: [
         {
@@ -1815,29 +1807,6 @@ describe("deriveMessagesTimelineRows", () => {
       latestRun: { ...input.latestRun, turnEnded: true },
     });
     expect(ended.some((row) => row.kind === "thinking")).toBe(false);
-
-    const streamingReply = deriveMessagesTimelineRows({
-      ...input,
-      timelineEntries: [
-        ...input.timelineEntries,
-        {
-          id: "assistant-entry",
-          kind: "message" as const,
-          createdAt: "2026-01-01T00:00:05Z",
-          message: {
-            id: "assistant" as never,
-            role: "assistant" as const,
-            text: "Here is the first paragraph of the answer",
-            runId: "turn-1" as never,
-            createdAt: "2026-01-01T00:00:05Z",
-            updatedAt: "2026-01-01T00:00:06Z",
-            streaming: true,
-          },
-        },
-      ],
-    });
-    expect(streamingReply.at(-1)?.id).toBe("assistant-entry");
-    expect(streamingReply.some((row) => row.kind === "thinking")).toBe(false);
   });
 
   it("keeps a promptless restart in one active visual response", () => {
@@ -4565,6 +4534,7 @@ it("keeps the working header in place across worktree setup handoff", () => {
     "worktree-setup",
     "working",
     "message",
+    "thinking",
   ]);
 
   const stage = (id: "agent" | "setup-script", status: "done" | "running") =>
@@ -4760,29 +4730,7 @@ describe("failed turn transcript", () => {
       );
       expect(work.at(-1)?.detail).toBe("The provider stopped this turn.\nRetry later.");
       expect(work.at(-1)?.createdAt).toBe("2026-09-20T12:00:00.000Z");
-      if (isLatest) {
-        // The recovery notice hides the failure row; the run's work stays grouped.
-        const noticeRows = deriveMessagesTimelineRows({
-          timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
-            visibleTurnItems: items.filter((row) => row.item.type !== "error"),
-            optimisticMessages: [],
-          }),
-          latestRun: {
-            runId,
-            status: "failed",
-            startedAt: DateTime.formatIso(at),
-            completedAt: DateTime.formatIso(at),
-          },
-          usageLimitRunId: runId,
-          isWorking: false,
-          turnDiffSummaries: [],
-          supportsConversationRollback: false,
-        });
-        expect(noticeRows.find((row) => row.kind === "work-toggle")).toEqual(
-          expect.objectContaining({ hiddenCount: 3, expanded: false }),
-        );
-        return;
-      }
+      if (isLatest) return;
       const entriesWithoutTools = deriveTimelineEntriesFromVisibleTurnItems({
         visibleTurnItems: items.filter((row) => row.item.type !== "command_execution"),
         optimisticMessages: [],
@@ -5079,20 +5027,6 @@ describe("parent run waiting on foreground subagents", () => {
   it("names the running children while the open run has done nothing since launching them", () => {
     expect(liveRow([])).toEqual({ ...thinking, label: "Waiting on 2 subagents" });
     expect(liveRow([], "hideAll")).toEqual({ ...thinking, label: "Waiting on 2 subagents" });
-  });
-
-  // regression: #40551 a finished status after the children is the parent parking, not new work
-  it("names the running children when the parent's finished status message follows them", () => {
-    const status: OrchestrationV2TurnItem = {
-      ...base("status", 5),
-      status: "completed",
-      type: "assistant_message",
-      messageId: MessageId.make("status"),
-      text: "Subagents launched; waiting for them to report back.",
-      streaming: false,
-    };
-    expect(liveRow([status])).toEqual({ ...thinking, label: "Waiting on 2 subagents" });
-    expect(liveRow([{ ...status, runId: RunId.make("other-run") }])).toEqual(thinking);
   });
 
   it("keeps Thinking when a hidden newer parent command follows the children", () => {

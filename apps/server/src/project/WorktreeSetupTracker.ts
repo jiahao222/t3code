@@ -11,7 +11,6 @@ import {
   WORKTREE_SETUP_STAGE_ORDER,
   WORKTREE_SETUP_TAIL_LINE_MAX_LENGTH,
 } from "@t3tools/contracts";
-import { splitsSurrogatePair } from "@t3tools/shared/assistantCitations";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -68,9 +67,7 @@ export class WorktreeSetupTracker extends Context.Service<
 const TAIL_LINE_LIMIT = 4;
 
 function clampText(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  const end = splitsSurrogatePair(text, maxLength - 1) ? maxLength - 2 : maxLength - 1;
-  return `${text.slice(0, end)}\u2026`;
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}\u2026`;
 }
 
 const clampDetail = (detail: string | null): string | null =>

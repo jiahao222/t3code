@@ -42,7 +42,7 @@ const SuccessProto = Object.assign(Object.create(CommonProto), {
     return {
       _id: "Result",
       _tag: this._tag,
-      success: toJson(this.success)
+      value: toJson(this.success)
     }
   }
 })

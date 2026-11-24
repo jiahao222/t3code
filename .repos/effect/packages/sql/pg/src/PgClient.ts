@@ -23,8 +23,6 @@ import * as Statement from "effect/sql/Statement"
 import * as Stream from "effect/Stream"
 import type { Duplex } from "node:stream"
 import type { ConnectionOptions } from "node:tls"
-import { resolveConfig } from "./internal/config.ts"
-import { connectionInternals } from "./internal/connection.ts"
 import { validateChannelName } from "./internal/sqlError.ts"
 import * as PgConnection from "./PgConnection.ts"
 import * as PgPool from "./PgPool.ts"
@@ -55,7 +53,7 @@ export type TypeId = "~@effect/sql-pg/PgClient"
  * @category services
  * @since 4.0.0
  */
-export interface PgClient extends Client.Base {
+export interface PgClient extends Client.SqlClient {
   readonly [TypeId]: TypeId
   readonly config: PgClientConfig
   readonly json: (_: unknown) => Fragment
@@ -86,7 +84,7 @@ export interface PgClient extends Client.Base {
  * @category services
  * @since 4.0.0
  */
-export const PgClient = Context.Service<PgClient, PgClient & Client.SqlClient>("@effect/sql-pg/PgClient")
+export const PgClient = Context.Service<PgClient>("@effect/sql-pg/PgClient")
 
 /**
  * Connection and query settings for a PostgreSQL client.
@@ -227,7 +225,7 @@ export interface PgPoolConfig<R = never> extends PgClientConfig<R> {
  */
 export const make = <R = never>(
   options: PgPoolConfig<R>
-): Effect.Effect<PgClient & Client.SqlClient, SqlError, Scope.Scope | Reactivity.Reactivity | R> =>
+): Effect.Effect<PgClient, SqlError, Scope.Scope | Reactivity.Reactivity | R> =>
   Effect.flatMap(PgPool.make(options), (pool) =>
     makeImpl({
       acquirer: Effect.map(pool.get, makeConnection),
@@ -252,7 +250,7 @@ export const makeClient = <R = never>(
      */
     readonly acquireForStream?: boolean | undefined
   }
-): Effect.Effect<PgClient & Client.SqlClient, SqlError, Scope.Scope | Reactivity.Reactivity | R> =>
+): Effect.Effect<PgClient, SqlError, Scope.Scope | Reactivity.Reactivity | R> =>
   Effect.flatMap(PgConnection.make(options), (connection) =>
     makeImpl({
       acquirer: Effect.succeed(makeConnection(
@@ -278,14 +276,13 @@ const makeImpl = Effect.fnUntraced(function*<R>(
     readonly config: PgClientConfig<R>
     readonly poolStats: Effect.Effect<Pool.Stats>
   }
-): Effect.fn.Return<PgClient & Client.SqlClient, SqlError, Scope.Scope | Reactivity.Reactivity | R> {
+): Effect.fn.Return<PgClient, SqlError, Scope.Scope | Reactivity.Reactivity | R> {
   // The consuming fiber's services take precedence over the captured ones.
   const hook = options.config.onAcquire
   const context = yield* Effect.context<R>()
   const onAcquire = hook &&
     Effect.updateContext(hook, (current: Context.Context<never>) => Context.merge(context, current))
   const config: PgClientConfig = { ...options.config, onAcquire }
-  const resolved = yield* resolveConfig(config)
   let { acquirer, borrower, listenAcquirer, transactionAcquirer } = options
   if (onAcquire !== undefined) {
     acquirer = Effect.tap(acquirer, onAcquire)
@@ -323,18 +320,15 @@ const makeImpl = Effect.fnUntraced(function*<R>(
       prepareTransactionControls: true,
       commit,
       onCommitFailure,
-      // A session the server ended has nothing left to roll back.
-      isTransaction: (conn) => connectionInternals((conn as ConnectionImpl).connection).deadError() === undefined,
       releaseSavepoint: (name) => `RELEASE SAVEPOINT ${name}`,
       transactionAcquirer,
       compiler,
       spanAttributes: [
         ...(config.spanAttributes ? Object.entries(config.spanAttributes) : []),
         [ATTR_DB_SYSTEM_NAME, "postgresql"],
-        // PostgreSQL connects to the database named after the user when none is given.
-        [ATTR_DB_NAMESPACE, resolved.startupParameters.database ?? resolved.username],
-        [ATTR_SERVER_ADDRESS, resolved.host],
-        [ATTR_SERVER_PORT, resolved.port]
+        [ATTR_DB_NAMESPACE, config.database ?? config.username ?? "postgres"],
+        [ATTR_SERVER_ADDRESS, config.host ?? "localhost"],
+        [ATTR_SERVER_PORT, config.port ?? 5432]
       ],
       transformRows
     }),
@@ -458,7 +452,7 @@ const makeConnection = (
  * @since 4.0.0
  */
 export const layerFrom = <E, R>(
-  acquire: Effect.Effect<PgClient & Client.SqlClient, E, R>
+  acquire: Effect.Effect<PgClient, E, R>
 ): Layer.Layer<PgClient | Client.SqlClient, E, Exclude<R, Scope.Scope | Reactivity.Reactivity>> =>
   Layer.effectContext(
     Effect.map(acquire, (client) =>

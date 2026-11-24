@@ -126,26 +126,18 @@ const MODEL_IDS: Record<number, string> = {
   1417: "gemini-4-argon",
   1418: "gemini-4-argon",
   1419: "gemini-4-argon",
-  1537: "gemini-pro-orchestrator-neon",
 };
 
 // Effort and routing variants share the base model's price.
 export const antigravityRateModel = (model: string) => {
-  const base = model.replace(
-    /-(?:extra-low|low|medium|high|tiered|control|thinking|agent|orchestrator)$/,
-    "",
-  );
+  const base = model.replace(/-(?:extra-low|low|medium|high|tiered|control|thinking|agent)$/, "");
   return /^gemini-3-flash-(?:agent(?:-[ab])?|[ab])$/.test(model)
     ? "gemini-3.5-flash"
     : model === "gemini-3.7-flash-safety-le"
       ? "gemini-3.7-flash"
-      : model === "gemini-pro-orchestrator-neon"
-        ? "gemini-4-neon"
-        : model === "gemini-pro-orchestrator-g1-pro"
-          ? "gemini-4-argon"
-          : base === "gemini-3-flash"
-            ? "gemini-3-flash-preview"
-            : base;
+      : base === "gemini-3-flash"
+        ? "gemini-3-flash-preview"
+        : base;
 };
 
 function withRateModel(record: UsageRecord): UsageRecord {
@@ -186,6 +178,8 @@ interface Metadata {
   modelId: number;
   timestampMs: number | null;
   usages: Fields[];
+  generationIndex: number | null;
+  hasPrimaryUsage: boolean;
 }
 
 function metadata(bytes: Uint8Array, step: boolean): Metadata {
@@ -199,10 +193,22 @@ function metadata(bytes: Uint8Array, step: boolean): Metadata {
   // Copy the usage bytes: subarrays kept in usages would hold each row's whole blob alive.
   const primaryUsage = usage === undefined ? undefined : fields(usage.slice());
   const usages = primaryUsage === undefined ? [] : [primaryUsage];
+  const retries: Uint8Array[] = [];
   for (const retry of data.get(step ? 28 : 17) ?? []) {
     if (!(retry instanceof Uint8Array)) throw new Error("Invalid retry metadata");
     const retryUsage = bytesAt(fields(retry), 2);
-    if (retryUsage !== undefined) usages.push(fields(retryUsage.slice()));
+    if (retryUsage !== undefined) retries.push(retryUsage);
+  }
+  // ACP repeats the successful attempt in primary usage, even without response IDs.
+  const repeatedPrimary =
+    usage === undefined
+      ? -1
+      : retries.findLastIndex(
+          (retry) =>
+            retry.length === usage.length && retry.every((byte, index) => byte === usage[index]),
+        );
+  for (const [index, retry] of retries.entries()) {
+    if (index !== repeatedPrimary) usages.push(fields(retry.slice()));
   }
   const names = [textAt(model, step ? 12 : 19), textAt(model, step ? 8 : 21)].map(modelName);
   return {
@@ -211,9 +217,11 @@ function metadata(bytes: Uint8Array, step: boolean): Metadata {
     modelId:
       numberAt(model, step ? 1 : 3) || (primaryUsage === undefined ? 0 : numberAt(primaryUsage, 1)),
     timestampMs: step
-      ? (timestamp(nested(data, 8)) ?? timestamp(nested(data, 1)))
+      ? (timestamp(nested(data, 1)) ?? timestamp(nested(data, 8)))
       : timestamp(nested(nested(data, 9), 4)),
     usages,
+    generationIndex: step && bytesAt(data, 20) !== undefined ? numberAt(nested(data, 20), 3) : null,
+    hasPrimaryUsage: primaryUsage !== undefined,
   };
 }
 
@@ -261,8 +269,9 @@ const readDatabase = Effect.fn("readDatabase")(function* (
         "SELECT name FROM sqlite_master WHERE type = 'table'",
       )).map((row) => row.name),
     );
-    // Not a conversation store, e.g. agy's conversation_summaries.db index.
-    if (!tables.has("gen_metadata") && !tables.has("steps")) return null;
+    if (!tables.has("gen_metadata") && !tables.has("steps")) {
+      return yield* new AntigravityDatabaseDecodeError({ path });
+    }
     // Seek by rowid regardless of indexes; idx normally aliases rowid, but sort for layouts where it does not.
     const readMetadata = Effect.fnUntraced(function* (
       query: string,
@@ -354,7 +363,8 @@ function usageCandidates(
     for (const [index, { idx, entry }] of entries.entries()) {
       for (const [usageIndex, usage] of entry.usages.entries()) {
         const modelId = numberAt(usage, 1) || entry.modelId;
-        const generation = source === "step" ? generationModels.get(idx) : undefined;
+        const generation =
+          source === "step" ? generationModels.get(entry.generationIndex ?? idx) : undefined;
         // A retry can use a different model than its enclosing generation or step.
         const matches = (metadata: Metadata) => modelId === 0 || metadata.modelId === modelId;
         const model =
@@ -383,6 +393,18 @@ function usageCandidates(
           const id = textAt(usage, key);
           return id ? [`antigravity:${key}:${id}`] : [];
         });
+        const generationIndex = source === "generation" ? idx : entry.generationIndex;
+        if (
+          usageIndex === 0 &&
+          entry.hasPrimaryUsage &&
+          generationIndex !== null &&
+          keys.length === 0
+        ) {
+          const signature = JSON.stringify(
+            [2, 3, 4, 5, 9, 10].map((field) => numberAt(usage, field)),
+          );
+          keys.push(`antigravity:${sessionId}:generation:${generationIndex}:primary:${signature}`);
+        }
         const record: UsageRecord = {
           provider: "antigravity",
           sessionId,
@@ -428,7 +450,7 @@ export const readAntigravityUsage = Effect.fn("readAntigravityUsage")(function* 
   const files: Array<{ root: string; path: string; records: UsageRecord[] }> = [];
   const errors: string[] = [];
   const models = new Map<number, string | null>();
-  const pending: Array<{ data: NonNullable<CachedDatabase["data"]>; fileIndex: number }> = [];
+  const pending: Array<{ data: CachedDatabase["data"]; fileIndex: number }> = [];
   const identities = new Map<string, number>();
   const groups: Array<
     UsageCandidate & { parent: number; size: number; owner: number; fileIndex: number }

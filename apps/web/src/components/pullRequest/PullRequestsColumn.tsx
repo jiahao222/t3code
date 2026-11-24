@@ -48,14 +48,10 @@ function ExpandableSearch({
       <div
         ref={containerRef}
         className="w-56 min-w-24 shrink"
-        onFocus={() => {
-          onFocusWithin?.(true);
-          // Open while focused, so Escape clearing the query does not unmount the field.
-          onOpenChange(true);
-        }}
+        onFocus={() => onFocusWithin?.(true)}
         onBlur={() => {
           onFocusWithin?.(false);
-          onOpenChange(false);
+          if (searchValue.length === 0) onOpenChange(false);
         }}
       >
         {searchInput}
@@ -142,7 +138,6 @@ export function PullRequestsColumn({
   const searchExpanded = searchOpen || searchValue.length > 0;
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- window keydown listener focuses the visible search input on Cmd/Ctrl+F
   useEffect(() => {
-    if (maximizedAway) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
@@ -156,7 +151,7 @@ export function PullRequestsColumn({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [condensed, maximizedAway]);
+  }, [condensed]);
   if (!condensed && searchOpen) setSearchOpen(false);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- moves DOM focus to the in-flow search when the topbar search it was typed in unmounts
   useEffect(() => {

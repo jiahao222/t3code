@@ -2,23 +2,26 @@ import { assert } from "@effect/vitest"
 import { type Schema, type SchemaAST, SchemaRepresentation } from "effect"
 import { TestSchema } from "effect/testing"
 import { describe, it } from "vitest"
-import { throws } from "../../utils/assert.ts"
-import { assertSchemas, makeModule } from "../../utils/schemaCodegen.ts"
+import { deepStrictEqual, throws } from "../../utils/assert.ts"
 
-const makeCode = (runtime: string, Type: string): SchemaRepresentation.Code => ({ runtime, Type })
+const makeCode = SchemaRepresentation.makeCode
 
 type Expected = {
   readonly codes: ReadonlyArray<SchemaRepresentation.Code>
-  readonly references?: Readonly<Record<string, SchemaRepresentation.Code>>
+  readonly references?: Partial<SchemaRepresentation.CodeDocument["references"]>
 }
 
 function assertCode(schemas: readonly [Schema.Top, ...Array<Schema.Top>], expected: Expected) {
   const document = SchemaRepresentation.toRepresentations(
     schemas.map((schema) => schema.ast) as [SchemaAST.AST, ...Array<SchemaAST.AST>]
   )
-  assertSchemas(makeModule(document), {
-    ...expected.references,
-    ...Object.fromEntries(expected.codes.map((code, i) => ["TestRoot" + i, code]))
+  deepStrictEqual(SchemaRepresentation.toCodeDocument(document), {
+    codes: expected.codes,
+    references: {
+      nonRecursives: expected.references?.nonRecursives ?? [],
+      recursives: expected.references?.recursives ?? {}
+    },
+    artifacts: []
   })
 }
 
@@ -87,7 +90,12 @@ describe("SchemaRepresentation.fromJsonSchemaMultiDocument", () => {
         ),
         makeCode(`Impossible`, `Impossible`)
       ],
-      references: { "Impossible": makeCode(`Schema.Never.annotate({ "identifier": "Impossible" })`, `never`) }
+      references: {
+        nonRecursives: [{
+          $ref: "Impossible",
+          code: makeCode(`Schema.Never.annotate({ "identifier": "Impossible" })`, `never`)
+        }]
+      }
     })
   })
 
@@ -108,7 +116,9 @@ describe("SchemaRepresentation.fromJsonSchemaMultiDocument", () => {
         ),
         makeCode(`X`, `X`)
       ],
-      references: { "X": makeCode(`Schema.String.annotate({ "identifier": "X" })`, `string`) }
+      references: {
+        nonRecursives: [{ $ref: "X", code: makeCode(`Schema.String.annotate({ "identifier": "X" })`, `string`) }]
+      }
     })
   })
 
@@ -145,10 +155,13 @@ describe("SchemaRepresentation.fromJsonSchemaMultiDocument", () => {
     assertCode(schemas, {
       codes: [makeCode(`A`, `A`)],
       references: {
-        "A": makeCode(
-          `Schema.String.check(Schema.isPattern(new globalThis.RegExp("^a+$", "u")).annotate({ "expected": "a string matching the RegExp ^a+$", "identifier": "A" }))`,
-          `string`
-        )
+        nonRecursives: [{
+          $ref: "A",
+          code: makeCode(
+            `Schema.String.check(Schema.isPattern(new globalThis.RegExp("^a+$", "u")).annotate({ "expected": "a string matching the RegExp ^a+$", "identifier": "A" }))`,
+            `string`
+          )
+        }]
       }
     })
   })
@@ -174,7 +187,7 @@ describe("SchemaRepresentation.fromJsonSchemaMultiDocument", () => {
     )
   })
 
-  it("omits contentSchema when it contains a reference", () => {
+  it("preserves contentSchema as an annotation without traversing it", () => {
     const schemas = SchemaRepresentation.fromJsonSchemaMultiDocument({
       dialect: "draft-2020-12",
       schemas: [{
@@ -194,7 +207,7 @@ describe("SchemaRepresentation.fromJsonSchemaMultiDocument", () => {
 
     assertCode(schemas, {
       codes: [makeCode(
-        `Schema.String.annotate({ "contentMediaType": "application/json" })`,
+        `Schema.String.annotate({ "contentMediaType": "application/json", "contentSchema": { "$ref": "#/$defs/Payload" } })`,
         `string`
       )]
     })
@@ -235,14 +248,17 @@ describe("SchemaRepresentation.fromJsonSchemaMultiDocument", () => {
       codes: [
         makeCode(`A`, `A`),
         makeCode(`Schema.suspend((): Schema.Codec<A> => A).annotate({ "description": "second" })`, `A`),
-        makeCode(`Schema.Array(A)`, `globalThis.ReadonlyArray<A>`),
+        makeCode(`Schema.Array(A)`, `ReadonlyArray<A>`),
         makeCode(`Schema.suspend((): Schema.Codec<A> => A).annotate({ "description": "fourth" })`, `A`)
       ],
       references: {
-        "A": makeCode(
-          `Schema.String.check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1", "identifier": "A" }))`,
-          `string`
-        )
+        nonRecursives: [{
+          $ref: "A",
+          code: makeCode(
+            `Schema.String.check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1", "identifier": "A" }))`,
+            `string`
+          )
+        }]
       }
     })
   })
@@ -261,10 +277,13 @@ describe("SchemaRepresentation.fromJsonSchemaMultiDocument", () => {
     assertCode(schemas, {
       codes: [makeCode(`Schema.suspend((): Schema.Codec<A> => A).annotate({ "description": "root" })`, `A`)],
       references: {
-        "A": makeCode(
-          `Schema.Number.check(Schema.isFinite().annotate({ "expected": "a finite number", "identifier": "A" }))`,
-          `number`
-        )
+        nonRecursives: [{
+          $ref: "A",
+          code: makeCode(
+            `Schema.Number.check(Schema.isFinite().annotate({ "expected": "a finite number", "identifier": "A" }))`,
+            `number`
+          )
+        }]
       }
     })
   })
@@ -282,8 +301,10 @@ describe("SchemaRepresentation.fromJsonSchemaMultiDocument", () => {
     assertCode(schemas, {
       codes: [makeCode(`A`, `A`), makeCode(`B`, `B`)],
       references: {
-        A: makeCode(`Schema.suspend((): Schema.Codec<A> => A).annotate({ "identifier": "A" })`, `A`),
-        B: makeCode(`Schema.suspend((): Schema.Codec<B> => B).annotate({ "identifier": "B" })`, `B`)
+        recursives: {
+          A: makeCode(`Schema.suspend((): Schema.Codec<A> => A).annotate({ "identifier": "A" })`, `A`),
+          B: makeCode(`Schema.suspend((): Schema.Codec<B> => B).annotate({ "identifier": "B" })`, `B`)
+        }
       }
     })
   })

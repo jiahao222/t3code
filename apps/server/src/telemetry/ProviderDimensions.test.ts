@@ -37,7 +37,7 @@ const thread = (
   ...overrides,
 });
 
-it("reports every model name but never instance names", () => {
+it("omits custom, user-configured, and unknown models and instance names", () => {
   expect(
     agentToolProperties({
       tool: "t3_thread_send",
@@ -54,13 +54,13 @@ it("reports every model name but never instance names", () => {
   ).toEqual([
     {
       callerProvider: "claudeAgent",
-      callerModel: "my-private-finetune",
+      callerModel: undefined,
       targetProvider: "opencode",
-      targetModel: "ollama/acme-internal",
+      targetModel: undefined,
     },
     {
       callerProvider: "claudeAgent",
-      callerModel: "my-private-finetune",
+      callerModel: undefined,
       targetProvider: "unknown",
       targetModel: undefined,
     },

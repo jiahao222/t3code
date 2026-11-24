@@ -152,10 +152,7 @@ const promotionOrder = (packages: ReadonlyArray<ReleasePackage>): ReadonlyArray<
  * `latest` needs to move when it is missing or lower than the target. A
  * `latest` that is not valid semver is an error rather than a guess.
  */
-export const needsPromotion = (
-  pkg: ReleasePackage,
-  latest: string | undefined
-): Effect.Effect<boolean, NpmPromoteError> => {
+const needsPromotion = (pkg: ReleasePackage, latest: string | undefined): Effect.Effect<boolean, NpmPromoteError> => {
   if (latest === undefined) {
     return Effect.succeed(true)
   }
@@ -239,8 +236,6 @@ export const promote = Effect.fnUntraced(function*(
  * Why a target version is missing from the abbreviated metadata, according to
  * the version-specific registry document.
  *
- * - `Unpromoted`: every pending package was added after the version bump,
- *   and this released package's live `latest` is still below its target.
  * - `Published`: the version document exists, so the abbreviated metadata is
  *   lagging behind.
  * - `Missing`: the registry returned 404, so the publish most likely failed.
@@ -248,7 +243,6 @@ export const promote = Effect.fnUntraced(function*(
  * - `PromotionFailed`: the version is visible, but moving `latest` to it failed.
  */
 export type Diagnosis =
-  | { readonly _tag: "Unpromoted"; readonly pkg: ReleasePackage; readonly reason: string }
   | { readonly _tag: "Published"; readonly pkg: ReleasePackage }
   | { readonly _tag: "Missing"; readonly pkg: ReleasePackage }
   | { readonly _tag: "Unknown"; readonly pkg: ReleasePackage; readonly reason: string }

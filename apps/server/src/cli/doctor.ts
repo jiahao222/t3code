@@ -13,16 +13,12 @@ import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntim
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import * as CliService from "./service.ts";
 
-// Pick the unit after rounding, so a size just under 1 GiB reads "1.00 GiB", not "1024.0 MiB".
-const formatBytes = (bytes: number) => {
-  const mebibytes = (bytes / 1024 ** 2).toFixed(1);
-  const kibibytes = Math.ceil(bytes / 1024);
-  return Number(mebibytes) >= 1024
+const formatBytes = (bytes: number) =>
+  bytes >= 1024 ** 3
     ? `${(bytes / 1024 ** 3).toFixed(2)} GiB`
-    : kibibytes >= 1024
-      ? `${mebibytes} MiB`
-      : `${kibibytes} KiB`;
-};
+    : bytes >= 1024 ** 2
+      ? `${(bytes / 1024 ** 2).toFixed(1)} MiB`
+      : `${Math.ceil(bytes / 1024)} KiB`;
 
 const formatElapsed = (nanos: bigint) => {
   const seconds = Number(nanos / 1_000_000_000n);

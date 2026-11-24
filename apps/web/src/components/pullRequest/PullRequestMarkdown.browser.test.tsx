@@ -24,7 +24,7 @@ async function renderBody(
 ) {
   const { repository = null, text = "first line\nsecond line", ...props } = options;
   const context = {
-    extensions: {},
+    remarkPlugins: [],
     lineBreaks: sourceControlClients.get(host).hardLineBreaks ?? false,
     threadRef: null,
     repository,

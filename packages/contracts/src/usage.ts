@@ -133,7 +133,20 @@ export const UsageModelFilter = Schema.Struct({
 });
 export type UsageModelFilter = typeof UsageModelFilter.Type;
 
+export const UsageRequest = Schema.Struct({
+  id: Schema.String,
+  timestampMs: Schema.Number,
+  provider: UsageProviderKind,
+  account: Schema.String,
+  sourcePath: Schema.String,
+  sessionId: Schema.String,
+  model: Schema.String,
+  totals: UsageTokenTotals,
+});
+export type UsageRequest = typeof UsageRequest.Type;
+
 export const UsageSummaryInput = Schema.Struct({
+  includeRequests: Schema.optional(Schema.Boolean),
   sinceDay: UsageDay,
   untilDay: UsageDay,
   /** IANA bucketing zone; offsets fail across DST boundaries. */
@@ -149,6 +162,8 @@ export const UsageSummaryInput = Schema.Struct({
 export type UsageSummaryInput = typeof UsageSummaryInput.Type;
 
 export const UsageSummary = Schema.Struct({
+  requests: Schema.optional(Schema.Array(UsageRequest)),
+  requestCount: Schema.optional(NonNegativeInt),
   contractVersion: Schema.Number,
   readAt: Schema.String,
   timeZone: TrimmedNonEmptyString,

@@ -13,7 +13,7 @@ import type {
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { CircleAlertIcon, MicIcon, RefreshCwIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useClientSettings } from "../../hooks/useSettings";
 import {
@@ -58,19 +58,14 @@ export function VoiceInputSetup(props: {
   const selectedMicrophone = preferredMicrophoneId(order, microphones);
   const [loadingMicrophones, setLoadingMicrophones] = useState(false);
   const [microphoneError, setMicrophoneError] = useState<string | null>(null);
-  const microphoneRefreshId = useRef(0);
   const refreshMicrophones = useStableCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
-    const requestId = ++microphoneRefreshId.current;
     setLoadingMicrophones(true);
-    const devices = await listBrowserMicrophones().catch(() => null);
-    if (requestId !== microphoneRefreshId.current) return;
-
-    if (devices === null) {
-      setMicrophoneError(m(msg("Couldn’t list microphones. The system default still works.")));
-    } else {
-      setMicrophones(devices);
+    try {
+      setMicrophones(await listBrowserMicrophones());
       setMicrophoneError(null);
+    } catch {
+      setMicrophoneError(m(msg("Couldn’t list microphones. The system default still works.")));
     }
     setLoadingMicrophones(false);
   });

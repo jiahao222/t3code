@@ -1,3 +1,6 @@
+import {
+  isBlockedT3OrTelemetryHost,
+} from "@t3tools/shared/localEgressGuard";
 import { MAC_PERMISSION_SETTINGS_URLS } from "../permissions/MacPermission.ts";
 import {
   isLocalEditorFileUrl,
@@ -56,6 +59,14 @@ export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
 
   try {
     const url = new URL(rawUrl);
+    if (
+      SAFE_WEB_PROTOCOLS.has(url.protocol) &&
+      (isBlockedT3OrTelemetryHost(url.hostname) ||
+        (url.hostname.toLowerCase() === "github.com" &&
+          url.pathname.toLowerCase().startsWith("/pingdotgg/")))
+    ) {
+      return Option.none();
+    }
     return SAFE_WEB_PROTOCOLS.has(url.protocol) ||
       isAppLaunchUrl(url) ||
       isRemoteEditorUrl(url) ||
@@ -66,12 +77,6 @@ export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
     return Option.none();
   }
 }
-
-/** Links that open in the browser, for callers such as popups that carry no identity. */
-export const parseWebExternalUrl = (rawUrl: unknown): Option.Option<string> =>
-  Option.filter(parseSafeExternalUrl(rawUrl), (url) =>
-    SAFE_WEB_PROTOCOLS.has(new URL(url).protocol),
-  );
 
 export class ElectronShell extends Context.Service<
   ElectronShell,

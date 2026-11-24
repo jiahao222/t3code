@@ -105,10 +105,7 @@ export function buildErrorReport(error: unknown, environment: BootErrorEnvironme
   }
   let details = redact(parts.join("\n") || "(no error message)");
   if (details.length > MAX_ERROR_CHARS) {
-    let end = MAX_ERROR_CHARS;
-    const last = details.charCodeAt(end - 1);
-    if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-    details = `${details.slice(0, end)}\n[truncated]`;
+    details = `${details.slice(0, MAX_ERROR_CHARS)}\n[truncated]`;
   }
   return [
     details,

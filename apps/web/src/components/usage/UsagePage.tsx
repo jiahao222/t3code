@@ -1,3 +1,4 @@
+import { UsageRequestPanel } from "./UsageRequestPanel";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
 import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -209,6 +210,7 @@ export function UsagePage() {
     useState<ReadonlySet<EnvironmentId> | null>(null);
   const hiddenProviders = new Set(preferences.hiddenProviders);
   const { days: windowDays, window } = windowSelection;
+  const requestWindow = { ...window, includeRequests: true };
   const isPast24Hours = windowDays === 1;
   const {
     merged: answeredUsage,
@@ -217,12 +219,12 @@ export function UsagePage() {
     shown,
     isPartial,
     refresh,
-  } = useUsage(window, selectedEnvironmentIds, hiddenProviders);
+  } = useUsage(requestWindow, selectedEnvironmentIds, hiddenProviders);
   const merged = shown?.merged ?? answeredUsage;
   const shownWindow = shown?.window ?? window;
   const shownHourly = shownWindow.resolution === "hour";
   const refreshingUsage = isRefreshing && !showingLimits;
-  const showingKept = shown !== null && shown.window !== window;
+  const showingKept = shown !== null && shown.window !== requestWindow;
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const presentationsWithProviders = useAtomValue(
     environmentPresentations.presentationsWithProvidersAtom,
@@ -321,7 +323,7 @@ export function UsagePage() {
     }
     refreshingRef.current = true;
     setIsRefreshing(true);
-    void refresh(nextWindow).finally(() => {
+    void refresh({ ...nextWindow, includeRequests: true }).finally(() => {
       refreshingRef.current = false;
       setIsRefreshing(false);
     });
@@ -519,7 +521,7 @@ export function UsagePage() {
           <AppRouteModalClose />
         </header>
 
-        <ScrollArea className="min-h-0 flex-1" observeContent>
+        <ScrollArea className="min-h-0 flex-1">
           <WorkspacePageContainer width="wide">
             {selectedEnvironments.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -553,20 +555,31 @@ export function UsagePage() {
                 ))}
               </div>
             ) : (
-              <UsageOverview
-                merged={merged}
-                shownWindow={shownWindow}
-                hour12={hour12}
-                days={days}
-                hours={hours}
-                showingKept={showingKept}
-                metric={metric === "tokens" ? "tokens" : "cost"}
-                selectedEnvironments={selectedEnvironments}
-                hiddenProviders={hiddenProviders}
-                refreshingUsage={refreshingUsage}
-                showChatGptSharing={showChatGptSharing}
-                onSelectModel={selectUsageModel}
-              />
+              <>
+                <UsageRequestPanel
+                  environments={selectedEnvironments}
+                  hiddenProviders={hiddenProviders}
+                />
+                <details className="mt-8 rounded-xl border border-border/60 p-5">
+                  <summary className="cursor-pointer text-sm font-medium">
+                    <T>Usage overview</T>
+                  </summary>
+                  <UsageOverview
+                    merged={merged}
+                    shownWindow={shownWindow}
+                    hour12={hour12}
+                    days={days}
+                    hours={hours}
+                    showingKept={showingKept}
+                    metric={metric === "tokens" ? "tokens" : "cost"}
+                    selectedEnvironments={selectedEnvironments}
+                    hiddenProviders={hiddenProviders}
+                    refreshingUsage={refreshingUsage}
+                    showChatGptSharing={showChatGptSharing}
+                    onSelectModel={selectUsageModel}
+                  />
+                </details>
+              </>
             )}
           </WorkspacePageContainer>
         </ScrollArea>

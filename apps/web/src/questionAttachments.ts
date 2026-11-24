@@ -15,11 +15,6 @@ import type {
 } from "@t3tools/contracts";
 import { create } from "zustand";
 import { DraftId, useComposerDraftStore } from "./composerDraftStore";
-import {
-  cancelPreparingComposerImages,
-  countPreparingComposerImages,
-  movePreparingComposerImagesToThread,
-} from "./components/chat/preparingComposerImages";
 import { releaseDraftAttachments } from "./lib/attachmentUploadQueue";
 import {
   carryDisplacedCustomAnswerIntoPrompt,
@@ -120,7 +115,6 @@ export function clearQuestionAttachmentDraft(
     }
   }
   store.clearComposerContent(key);
-  if (countPreparingComposerImages(key) > 0) cancelPreparingComposerImages(key);
   useQuestionAttachmentPreparation.setState(({ counts }) => {
     const next = { ...counts };
     delete next[key];
@@ -184,20 +178,12 @@ function returnUnsentAnswersToThreadDraft(
   }
 
   const threadPrefix = questionAttachmentDraftPrefix(environmentId, threadId);
-  const preparingKeys = Object.keys(useQuestionAttachmentPreparation.getState().counts);
-  const otherRequestKeys = new Set(
-    resolvedQuestionDraftKeys(
-      [...preparingKeys, ...Object.keys(store.draftsByThreadKey)],
-      threadPrefix,
-      unansweredRequestIds,
-    ),
+  const requestPrefixes = unansweredRequestIds.map(
+    (requestId) =>
+      `${threadPrefix}${encodeURIComponent(`${JSON.stringify([requestId]).slice(0, -1)},`)}`,
   );
-  const wasUnanswered = (key: string) => key.startsWith(threadPrefix) && !otherRequestKeys.has(key);
-  for (const key of preparingKeys.filter(wasUnanswered)) {
-    movePreparingComposerImagesToThread(key, target);
-  }
   const questionDrafts = Object.entries(store.draftsByThreadKey).filter(([key]) =>
-    wasUnanswered(key),
+    requestPrefixes.some((requestPrefix) => key.startsWith(requestPrefix)),
   );
   const images = questionDrafts.flatMap(([, draft]) => draft.images);
   const files = questionDrafts.flatMap(([, draft]) => draft.files);
@@ -207,11 +193,14 @@ function returnUnsentAnswersToThreadDraft(
   const moved = useComposerDraftStore.getState().getComposerDraft(target);
   const movedIds = new Set([...(moved?.images ?? []), ...(moved?.files ?? [])].map(({ id }) => id));
   // Only a mounted composer re-serializes images, so carry their saved copies for a reload.
-  void store.appendPersistedAttachments(
-    target,
-    images,
-    questionDrafts.flatMap(([, draft]) => draft.persistedAttachments),
-  );
+  const persisted = moved?.persistedAttachments ?? [];
+  const persistedIds = new Set(persisted.map(({ id }) => id));
+  const movedPersisted = questionDrafts
+    .flatMap(([, draft]) => draft.persistedAttachments)
+    .filter(({ id }) => movedIds.has(id) && !persistedIds.has(id));
+  if (movedPersisted.length > 0) {
+    void store.syncPersistedAttachments(target, [...persisted, ...movedPersisted]);
+  }
   for (const [key] of questionDrafts) clearQuestionAttachmentDraft(DraftId.make(key), movedIds);
 }
 

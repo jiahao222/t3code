@@ -247,8 +247,6 @@ import { Alert } from "react-native";
 import { useThreadComposerState } from "./use-thread-composer-state";
 import { useSelectedThreadRequests } from "./use-selected-thread-requests";
 import { questionAttachmentDraftKey } from "./question-attachments";
-import { startQuestionImagePreparation } from "./question-attachment-preparation";
-import { abortComposerDraftOperations } from "./composerDraftOperations";
 
 const NO_SIDE_CHATS = { startSideChat: async () => false };
 
@@ -646,19 +644,6 @@ it.each(["cancelled", "expired"] as const)(
   (status) => {
     const environmentId = EnvironmentId.make("secondary");
     const threadId = ThreadId.make("thread");
-    const unanswered = RuntimeRequestId.make("input");
-    const answered = RuntimeRequestId.make("input-other");
-    const questionKey = questionAttachmentDraftKey(environmentId, threadId, unanswered, "language");
-    const preparing = startQuestionImagePreparation(questionKey);
-    const preparingAnswered = startQuestionImagePreparation(
-      questionAttachmentDraftKey(environmentId, threadId, answered, "language"),
-    );
-    using _preparations = {
-      [Symbol.dispose]: () => {
-        preparing.finish();
-        preparingAnswered.finish();
-      },
-    };
     const notes = {
       id: "notes",
       type: "file",
@@ -667,7 +652,7 @@ it.each(["cancelled", "expired"] as const)(
       sizeBytes: 5,
     } as unknown as DraftComposerImageAttachment;
     state.questionDrafts = {
-      [questionKey]: {
+      [questionAttachmentDraftKey(environmentId, threadId, "input", "language")]: {
         text: "",
         attachments: [notes],
       },
@@ -675,19 +660,12 @@ it.each(["cancelled", "expired"] as const)(
     makeThreadRequestsResolvedAnnouncer(
       environmentId,
       threadId,
-    )([
-      { id: unanswered, status },
-      { id: answered, status: "resolved" },
-    ]);
+    )([{ id: RuntimeRequestId.make("input"), status }]);
     expect(state.appendAttachments).toHaveBeenCalledWith(
       "secondary:thread",
       [notes],
       expect.objectContaining({ appendReference: true }),
     );
-    expect(preparing.destination()).toBe("secondary:thread");
-    expect(preparingAnswered.destination()).toBeNull();
-    abortComposerDraftOperations("secondary:thread");
-    expect(preparing.destination()).toBeNull();
   },
 );
 

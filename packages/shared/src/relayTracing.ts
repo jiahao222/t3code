@@ -148,42 +148,9 @@ function gatedTracer(delegate: Tracer.Tracer, isEnabled: () => boolean): Tracer.
 }
 
 export function layer(
-  config: RelayClientTracingConfig | null,
-  resource: RelayClientTracingResource,
-  options?: { readonly isEnabled?: () => boolean },
+  _config: RelayClientTracingConfig | null,
+  _resource: RelayClientTracingResource,
+  _options?: { readonly isEnabled?: () => boolean },
 ): Layer.Layer<never, never, HttpClient.HttpClient> {
-  if (config === null) {
-    return Layer.succeed(RelayClientTracer, Option.none());
-  }
-
-  const layerTracer = OtlpTracer.layer({
-    url: config.tracesUrl,
-    headers: {
-      Authorization: `Bearer ${config.tracesToken}`,
-      "X-Axiom-Dataset": config.tracesDataset,
-    },
-    resource: {
-      serviceName: resource.serviceName,
-      serviceVersion: resource.serviceVersion,
-      attributes: {
-        "service.namespace": "t3code",
-        "service.instance.id": resource.serviceInstanceId,
-        "service.runtime": resource.runtime,
-        "t3code.component": resource.component ?? "relay-client",
-        "t3code.client.surface": resource.client,
-        ...resource.attributes,
-      },
-    },
-  }).pipe(Layer.provide(OtlpSerialization.layerJson));
-
-  return Layer.effect(
-    RelayClientTracer,
-    Tracer.Tracer.pipe(
-      Effect.map(nonInterferingTracer),
-      Effect.map((tracer) =>
-        options?.isEnabled ? gatedTracer(tracer, options.isEnabled) : tracer,
-      ),
-      Effect.asSome,
-    ),
-  ).pipe(Layer.provide(layerTracer));
+  return Layer.succeed(RelayClientTracer, Option.none());
 }

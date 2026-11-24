@@ -3,7 +3,6 @@ import type { MFunctionType } from "gt-i18n/types";
 import type { ChatAttachment } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
-import { composerFileLinksToPlainText } from "@t3tools/shared/composerInlineTokens";
 import { truncate } from "@t3tools/shared/String";
 
 import { collectComposerModelMentions } from "../composerModelMentions.ts";
@@ -15,8 +14,7 @@ export interface ThreadTitleSeedInput {
 }
 
 function normalizeTitleSeed(value: string): string {
-  // Mentioned macOS paths can be NFD; titles show them composed.
-  return assistantCitationsToPlainText(value).trim().replace(/\s+/gu, " ").normalize("NFC");
+  return assistantCitationsToPlainText(value).trim().replace(/\s+/gu, " ");
 }
 
 function modelMentionsAsSlugs(value: string): string {
@@ -46,7 +44,7 @@ export function threadTitleTextFromPrompt(
     return reference.label;
   });
   return (
-    normalizeTitleSeed(modelMentionsAsSlugs(composerFileLinksToPlainText(prose))) ||
+    normalizeTitleSeed(modelMentionsAsSlugs(prose)) ||
     (imageIds.size > 0 ? attachedImagesTitle(imageIds.size, resolve) : "")
   );
 }

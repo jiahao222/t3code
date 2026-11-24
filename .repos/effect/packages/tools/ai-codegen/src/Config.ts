@@ -51,7 +51,7 @@ export class CodegenConfig extends Schema.Class<CodegenConfig>("CodegenConfig")(
   collapseErrorResponses: Schema.optional(Schema.Boolean),
   replacements: Schema.optional(Schema.Array(Replacement)),
   excludeAnnotations: Schema.optional(Schema.Array(Schema.String)),
-  closeObjects: Schema.optional(Schema.Boolean)
+  disableAdditionalProperties: Schema.optional(Schema.Boolean)
 }) {
   /**
    * Get the client name, defaulting to "Client" if not specified.
@@ -112,8 +112,8 @@ export class CodegenConfig extends Schema.Class<CodegenConfig>("CodegenConfig")(
    *
    * @since 4.0.0
    */
-  get shouldCloseObjects(): boolean {
-    return this.closeObjects ?? false
+  get shouldDisableAdditionalProperties(): boolean {
+    return this.disableAdditionalProperties ?? false
   }
 }
 

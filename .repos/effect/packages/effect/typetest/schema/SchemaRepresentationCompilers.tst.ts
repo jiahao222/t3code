@@ -15,6 +15,9 @@ describe("SchemaRepresentation compilers", () => {
         options?: Schema.ToJsonSchemaOptions
       ) => JsonSchema.MultiDocument<"draft-2020-12">
     >()
+    expect(SchemaRepresentation.toCodeDocument).type.toBe<
+      (document: SchemaRepresentation.MultiDocument) => SchemaRepresentation.CodeDocument
+    >()
   })
 
   it("distinguishes live compiler inputs and their outputs", () => {
@@ -26,6 +29,9 @@ describe("SchemaRepresentation compilers", () => {
     >()
     expect(SchemaRepresentation.toJsonSchemaMultiDocument(multiDocument)).type.toBe<
       JsonSchema.MultiDocument<"draft-2020-12">
+    >()
+    expect(SchemaRepresentation.toCodeDocument(multiDocument)).type.toBe<
+      SchemaRepresentation.CodeDocument
     >()
   })
 

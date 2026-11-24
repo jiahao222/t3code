@@ -253,7 +253,7 @@ const AtomProto = {
       _id: "Atom",
       keepAlive: this.keepAlive,
       lazy: this.lazy,
-      label: this.label && [this.label[0], this.label[1]]
+      label: this.label
     }
   }
 } as const
@@ -268,9 +268,6 @@ const RuntimeProto = {
     return readable((get) => {
       const previous = get.self<AsyncResult.AsyncResult<any, any>>()
       const runtimeResult = get(this)
-      if (runtimeResult._tag === "Initial" && runtimeResult.waiting) {
-        return AsyncResult.waitingFrom(previous)
-      }
       if (runtimeResult._tag !== "Success") {
         return AsyncResult.replacePrevious(runtimeResult, previous)
       }
@@ -1677,30 +1674,8 @@ export const withLabel: {
 >(2, (self, name) =>
   Object.assign(Object.create(Object.getPrototypeOf(self)), {
     ...self,
-    label: makeLabel(name, getStackTraceLimit() === 0 ? undefined : new Error())
+    label: [name, getStackTraceLimit() === 0 ? "" : new Error().stack?.split("\n")[5] ?? ""]
   }))
-
-// Formatting `error.stack` is slow on some engines (e.g. Hermes), so defer it
-// until the location is read.
-function makeLabel(name: string, error: Error | undefined): readonly [name: string, stack: string] {
-  const label: [name: string, stack: string] = [name, ""]
-  if (error === undefined) {
-    return label
-  }
-  let location = ""
-  Object.defineProperty(label, 1, {
-    configurable: true,
-    enumerable: true,
-    get: () => {
-      if (error !== undefined) {
-        location = error.stack?.split("\n")[5] ?? ""
-        error = undefined
-      }
-      return location
-    }
-  })
-  return label
-}
 
 /**
  * Options for seeding an effect or stream atom through registry initial values
@@ -1714,7 +1689,7 @@ function makeLabel(name: string, error: Error | undefined): readonly [name: stri
  * refreshed or one of its dependencies changes. The factory and any wrappers
  * still build, so `get(...)` calls in the factory and `withReactivity` keys are
  * tracked; only the first effect or stream run is skipped. Dependencies read
- * inside the effect are tracked from its first real run. An `Initial` or waiting seed
+ * inside the effect are tracked from its first real run. An `Initial` seed
  * never skips the effect.
  *
  * @stability unstable
@@ -1792,8 +1767,6 @@ export const transform: {
       readonly initialValueTarget?: Atom<B> | undefined
     }
   ): Atom<B> => {
-    // Forward through the registry so a serializable source resolves to its shared node.
-    const refresh = (refresh: (atom: Atom<any>) => void) => refresh(self)
     const atom = removeTtl(
       isWritable(self)
         ? writable(
@@ -1801,11 +1774,15 @@ export const transform: {
           function(ctx, value) {
             ctx.set(self, value)
           },
-          refresh
+          self.refresh ?? function(refresh) {
+            refresh(self)
+          }
         )
         : readable(
           (get) => f(get, self),
-          refresh
+          self.refresh ?? function(refresh) {
+            refresh(self)
+          }
         )
     )
     if (options?.initialValueTarget) {
@@ -1957,9 +1934,7 @@ export const withRefresh: {
  * Skips revalidation if the source becomes fresh or the atom is disposed.
  * Manual refreshes still forward to the source. `revalidateOnMount` controls
  * initial stale refreshes; `revalidateOnFocus` controls focus refreshes
- * (`true` respects `staleTime`, `"always"` forces refresh). Apply `swr` after
- * serialization and idle TTL so the source is retained and dehydrated, and
- * the wrapper checks freshness when mounted again.
+ * (`true` respects `staleTime`, `"always"` forces refresh).
  *
  * @stability unstable
  * @category combinators
@@ -2338,26 +2313,18 @@ export const kvs = <S extends Schema.ConstraintCodec<any, any>, const Mode exten
   readonly mode?: Mode | undefined
 }): Writable<"async" extends Mode ? AsyncResult.AsyncResult<S["Type"]> : S["Type"], S["Type"]> => {
   const setAtom = options.runtime.fn(
-    (value: S["Type"], get) =>
+    (value: S["Type"]) =>
       KeyValueStore.KeyValueStore.use((store) =>
-        Effect.map(
-          KeyValueStore.toSchemaStore(store, options.schema).set(options.key, value),
-          () => get.set(persistedAtom, value)
-        )
+        KeyValueStore.toSchemaStore(store, options.schema).set(options.key, value)
       )
   )
   const resultAtom = options.runtime.atom(
     KeyValueStore.KeyValueStore.use((store) => KeyValueStore.toSchemaStore(store, options.schema).get(options.key))
   )
-  const persistedAtom = writable(
-    (get) => get(resultAtom),
-    (ctx, value: S["Type"]) => ctx.setSelf(AsyncResult.success(Option.some(value)))
-  )
   return writable(
     options.mode === "async" ?
       (get) => {
         get.mount(setAtom)
-        get.mount(persistedAtom)
         const mapper = AsyncResult.map<Option.Option<S["Type"]>, S["Type"]>(
           Option.getOrElse(() => {
             const value = options.defaultValue()
@@ -2366,12 +2333,11 @@ export const kvs = <S extends Schema.ConstraintCodec<any, any>, const Mode exten
           })
         )
         get.subscribe(resultAtom, (result) => get.setSelf(mapper(result)))
-        return mapper(get.once(persistedAtom))
+        return mapper(get.once(resultAtom))
       } :
       (get) => {
         get.mount(setAtom)
-        get.mount(persistedAtom)
-        const update = (result: AsyncResult.AsyncResult<Option.Option<S["Type"]>, unknown>) => {
+        get.subscribe(resultAtom, (result) => {
           if (!AsyncResult.isSuccess(result)) return
           if (Option.isSome(result.value)) {
             get.setSelf(result.value.value)
@@ -2380,9 +2346,7 @@ export const kvs = <S extends Schema.ConstraintCodec<any, any>, const Mode exten
             get.setSelf(value)
             get.set(setAtom, value)
           }
-        }
-        get.subscribe(resultAtom, update)
-        update(get.once(persistedAtom))
+        }, { immediate: true })
         return Option.getOrElse(get.self<S["Type"]>(), options.defaultValue)
       },
     (ctx, value: S["Type"]) => {
@@ -2430,16 +2394,11 @@ export const searchParam = <S extends Schema.ConstraintCodec<any, string> = neve
           get.setSelf(newValue)
         }
       }
-      searchParamState.readers++
-      // Registered ahead of every reader, so stale writes are discarded before observers run.
-      window.addEventListener("popstate", cancelSearchParamUpdates)
       window.addEventListener("popstate", handleUpdate)
       window.addEventListener("pushstate", handleUpdate)
       get.addFinalizer(() => {
         window.removeEventListener("popstate", handleUpdate)
         window.removeEventListener("pushstate", handleUpdate)
-        searchParamState.readers--
-        releaseSearchParamCancel()
       })
       const value = new URLSearchParams(window.location.search).get(name) || ""
       return decode ? Exit.getSuccess(decode(value)) : value as any
@@ -2457,12 +2416,11 @@ export const searchParam = <S extends Schema.ConstraintCodec<any, string> = neve
       } else {
         searchParamState.updates.set(name, value)
       }
-      window.addEventListener("popstate", cancelSearchParamUpdates)
+      ctx.setSelf(value)
       if (searchParamState.timeout) {
         clearTimeout(searchParamState.timeout)
       }
       searchParamState.timeout = setTimeout(updateSearchParams, 500) as any
-      ctx.setSelf(value)
     }
   )
 }
@@ -2470,26 +2428,11 @@ export const searchParam = <S extends Schema.ConstraintCodec<any, string> = neve
 const searchParamState = {
   timeout: undefined as number | undefined,
   updates: new Map<string, string>(),
-  readers: 0,
   updating: false
-}
-
-function cancelSearchParamUpdates() {
-  clearTimeout(searchParamState.timeout)
-  searchParamState.timeout = undefined
-  searchParamState.updates.clear()
-  releaseSearchParamCancel()
-}
-
-function releaseSearchParamCancel() {
-  if (searchParamState.readers === 0 && searchParamState.timeout === undefined) {
-    window.removeEventListener("popstate", cancelSearchParamUpdates)
-  }
 }
 
 function updateSearchParams() {
   searchParamState.timeout = undefined
-  releaseSearchParamCancel()
   searchParamState.updating = true
   const searchParams = new URLSearchParams(window.location.search)
   for (const [key, value] of searchParamState.updates.entries()) {
@@ -2741,7 +2684,7 @@ export const serializable: {
   const codecJson = Schema.toCodecJson(options.schema)
   return Object.assign(Object.create(Object.getPrototypeOf(self)), {
     ...self,
-    label: self.label ?? makeLabel(options.key, getStackTraceLimit() === 0 ? undefined : new Error()),
+    label: self.label ?? [options.key, getStackTraceLimit() === 0 ? "" : new Error().stack?.split("\n")[5] ?? ""],
     [SerializableTypeId]: {
       key: options.key,
       encode: Schema.encodeSync(codecJson),

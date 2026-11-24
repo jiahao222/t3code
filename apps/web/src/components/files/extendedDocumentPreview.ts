@@ -29,7 +29,6 @@ const namespacePrefixes: Record<string, string> = {
   "urn:oasis:names:tc:opendocument:xmlns:table:1.0": "table",
   "urn:oasis:names:tc:opendocument:xmlns:text:1.0": "text",
   "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0": "draw",
-  "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0": "svg",
   "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0": "presentation",
   "http://www.w3.org/1999/xlink": "xlink",
   "http://www.w3.org/1999/xhtml": "",
@@ -267,12 +266,7 @@ async function epubHtml(node: XmlNode, archive: JSZip, base: string): Promise<st
   reserveMarkup(tag.length * 2 + spans.length + 5);
   return `<${tag}${spans}>${children}</${tag}>`;
 }
-async function odfHtml(
-  node: XmlNode,
-  archive: JSZip,
-  imageAlt = "",
-  inRepeatedRow = false,
-): Promise<string> {
+async function odfHtml(node: XmlNode, archive: JSZip): Promise<string> {
   if (node.name === "#text") return pipe(text(node), escape, boundedMarkup);
   if (node.name === "text:s" || node.name === "text:tab")
     return boundedMarkup(
@@ -284,44 +278,21 @@ async function odfHtml(
       archive,
       archivePath("content.xml", node.attrs["xlink:href"] ?? ""),
     );
-    return src ? `<img src="${src}" alt="${boundedMarkup(escape(imageAlt))}">` : "";
+    return src ? `<img src="${src}" alt="">` : "";
   }
   if (
     [
       "office:annotation",
       "presentation:notes",
-      "svg:title",
-      "svg:desc",
       "text:tracked-changes",
       "office:scripts",
       "draw:object",
       "draw:object-ole",
-      "text:table-of-content-source",
-      "text:illustration-index-source",
-      "text:table-index-source",
-      "text:object-index-source",
-      "text:user-index-source",
-      "text:alphabetical-index-source",
-      "text:bibliography-source",
-      "table:covered-table-cell",
     ].includes(node.name)
   )
     return "";
-  const childImageAlt =
-    node.name === "draw:frame"
-      ? ["svg:title", "svg:desc"]
-          .map((name) => node.children.find((child) => child.name === name))
-          .map((child) => (child ? text(child).trim() : ""))
-          .filter(Boolean)
-          .join(" ")
-      : "";
   let children = "";
-  const repeatedRow =
-    node.name === "table:table-row"
-      ? Number(node.attrs["table:number-rows-repeated"]) > 1
-      : inRepeatedRow;
-  for (const child of node.children)
-    children += await odfHtml(child, archive, childImageAlt, repeatedRow);
+  for (const child of node.children) children += await odfHtml(child, archive);
   const tags: Record<string, string> = {
     "text:p": "p",
     "text:h": "h2",
@@ -340,18 +311,7 @@ async function odfHtml(
       : tag === "td"
         ? repeat(node.attrs["table:number-columns-repeated"], TABLE_PREVIEW_MAX_COLUMNS)
         : 1;
-  let spans = "";
-  // Spans on repeated cells or rows would multiply past the preview's table limits.
-  if (tag === "td" && count === 1)
-    for (const [name, attr, max] of [
-      ["colspan", "table:number-columns-spanned", TABLE_PREVIEW_MAX_COLUMNS],
-      ["rowspan", "table:number-rows-spanned", repeatedRow ? 1 : TABLE_PREVIEW_MAX_ROWS],
-    ] as const) {
-      const span = Number(node.attrs[attr]);
-      if (max > 1 && Number.isSafeInteger(span) && span > 1)
-        spans += ` ${name}="${Math.min(span, max)}"`;
-    }
-  const markup = `<${tag}${spans}>${children}</${tag}>`;
+  const markup = `<${tag}>${children}</${tag}>`;
   reserveMarkup(count * markup.length - children.length);
   return markup.repeat(count);
 }
@@ -385,15 +345,13 @@ export async function openDocument(
             ["table:table-cell", "table:covered-table-cell"].includes(child.name),
           )) {
             const value =
-              cell.name === "table:covered-table-cell"
-                ? ""
-                : find(cell, "text:p", "office:annotation").map(text).join("\n") ||
-                  cell.attrs["office:value"] ||
-                  cell.attrs["office:date-value"] ||
-                  cell.attrs["office:time-value"] ||
-                  cell.attrs["office:boolean-value"] ||
-                  cell.attrs["office:string-value"] ||
-                  "";
+              find(cell, "text:p", "office:annotation").map(text).join("\n") ||
+              cell.attrs["office:value"] ||
+              cell.attrs["office:date-value"] ||
+              cell.attrs["office:time-value"] ||
+              cell.attrs["office:boolean-value"] ||
+              cell.attrs["office:string-value"] ||
+              "";
             const count = repeat(
               cell.attrs["table:number-columns-repeated"],
               TABLE_PREVIEW_MAX_COLUMNS + 1,
@@ -447,9 +405,8 @@ export async function openDocument(
 export async function openEpub(archive: JSZip): Promise<OfficeWorkerResult> {
   markupBytes = 0;
   const container = parseXml((await archive.file("META-INF/container.xml")?.async("string")) ?? "");
-  const fullPath = find(container, "rootfile")[0]?.attrs["full-path"] ?? "";
-  const rootfile = [archivePath("", fullPath), fullPath].find((path) => path && archive.file(path));
-  if (!rootfile) throw new PreviewError({ code: "epub-no-package" });
+  const rootfile = find(container, "rootfile")[0]?.attrs["full-path"];
+  if (!rootfile || !archive.file(rootfile)) throw new PreviewError({ code: "epub-no-package" });
   const packageRoot = parseXml(await archive.file(rootfile)!.async("string"));
   const manifest = new Map(find(packageRoot, "item").map((item) => [item.attrs.id, item]));
   const spine = find(packageRoot, "itemref");
@@ -526,16 +483,12 @@ export function openNotebook(bytes: ArrayBuffer): OfficeWorkerResult {
           }
           const html = notebookText(data["text/html"]);
           if (html.trim() && htmlImagesFit(html)) return { kind: "html" as const, text: html };
-          const text = terminalOutputPlainText(
-            notebookText(output.text ?? data["text/plain"] ?? tracebackLines(output.traceback)),
-          );
-          if (text.trim() || output.output_type !== "error") return { kind: "text" as const, text };
-          const summary = [output.ename, output.evalue]
-            .filter((part) => typeof part === "string")
-            .map((part) => terminalOutputPlainText(notebookText(part)))
-            .filter((part) => part.trim().length > 0)
-            .join(": ");
-          return { kind: "text" as const, text: summary };
+          return {
+            kind: "text" as const,
+            text: notebookText(
+              output.text ?? data["text/plain"] ?? tracebackLines(output.traceback),
+            ),
+          };
         })
         .filter((output) => output.text.trim().length > 0),
     };
@@ -549,6 +502,7 @@ const RTF_CHARACTERS = new Map([
   ["_", "\u2011"],
   ["-", "\u00ad"],
   ["tab", "\t"],
+  ["cell", "\t"],
   ["endash", "–"],
   // oxlint-disable-next-line t3code/no-em-dash-copy -- Preserve the RTF document's punctuation.
   ["emdash", "—"],
@@ -567,21 +521,6 @@ const RTF_CHARACTERS = new Map([
   ["rtlmark", "\u200f"],
 ]);
 
-const rtfCodePageLabel = (codePage: number) =>
-  (
-    {
-      0: "windows-1252",
-      866: "ibm866",
-      65001: "utf-8",
-      932: "shift_jis",
-      936: "gbk",
-      949: "euc-kr",
-      950: "big5",
-      874: "windows-874",
-      10000: "macintosh",
-    } as Record<number, string>
-  )[codePage] ?? `windows-${codePage}`;
-
 export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
   if (bytes.byteLength > 8 * 1024 * 1024) throw new PreviewError({ code: "rtf-too-large" });
   // Keep byte offsets intact for binary destinations and multibyte code pages.
@@ -592,19 +531,14 @@ export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
   if (!source.startsWith("{\\rtf")) throw new PreviewError({ code: "rtf-invalid" });
   let state = {
     skip: false,
-    deleted: false,
-    hiddenText: false,
     bold: false,
     italic: false,
     underline: false,
     uc: 1,
     font: 0,
     fontTable: false,
-    fontFile: false,
     decoder: new TextDecoder("windows-1252"),
   };
-  // A font's \cpg, else its \fcharset, encodes the bytes written in that font. A \cpg inside
-  // \fontfile encodes the font's file name instead.
   const fonts = new Map<number, TextDecoder>();
   let defaultFont = 0;
   const stack: (typeof state)[] = [];
@@ -619,18 +553,15 @@ export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
   };
   let run = "";
   let fallback = 0;
-  const hidden = () => state.skip || state.deleted || state.hiddenText;
   const encoded = new Uint8Array(bytes.byteLength);
   let encodedLength = 0;
-  const decodeBytes = () => {
-    if (!encodedLength) return;
-    run += escape(
-      (fonts.get(state.font) ?? state.decoder).decode(encoded.subarray(0, encodedLength)),
-    );
-    encodedLength = 0;
-  };
   const flush = () => {
-    decodeBytes();
+    if (encodedLength) {
+      run += escape(
+        (fonts.get(state.font) ?? state.decoder).decode(encoded.subarray(0, encodedLength)),
+      );
+      encodedLength = 0;
+    }
     if (completedLength + html.length + run.length > 8 * 1024 * 1024)
       throw new PreviewError({ code: "rtf-too-much-content" });
     if (!run) return;
@@ -641,20 +572,19 @@ export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
     html += span;
     run = "";
   };
-  const emit = (value: string, skip = hidden()) => {
+  const emit = (value: string) => {
     if (fallback > 0) {
       fallback--;
       return;
     }
-    if (skip) return;
-    decodeBytes();
+    if (state.skip) return;
     run += escape(value);
     if (completedLength + html.length + run.length > 8 * 1024 * 1024)
       throw new PreviewError({ code: "rtf-too-much-content" });
   };
   const emitByte = (value: number) => {
     if (fallback > 0) fallback--;
-    else if (!hidden()) encoded[encodedLength++] = value;
+    else if (!state.skip) encoded[encodedLength++] = value;
   };
   for (let i = 0; i < source.length;) {
     const char = source[i++];
@@ -678,9 +608,7 @@ export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
         emitByte(Number.parseInt(hex, 16));
         continue;
       }
-      // \u, \uc and skipped fallbacks change no formatting, so a character written as two \u
-      // words stays in one run.
-      if (fallback === 0 && !/^uc?-?\d/.test(source.slice(i, i + 4))) flush();
+      flush();
       if (next === "\\" || next === "{" || next === "}") {
         i++;
         emit(next);
@@ -696,25 +624,13 @@ export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
         const character = RTF_CHARACTERS.get(next!);
         if (character) emit(character);
         // A backslash before a line break is \par; TextEdit ends paragraphs this way.
-        else if (next === "\n" || next === "\r") {
-          if (fallback > 0) fallback--;
-          else if (!hidden()) html += "<br>";
-        }
+        else if ((next === "\n" || next === "\r") && !state.skip) html += "<br>";
         i++;
         continue;
       }
       i += match[0].length;
       const word = match[1];
       const arg = match[2] === undefined ? 1 : Number(match[2]);
-      if (word === "bin") {
-        if (!Number.isSafeInteger(arg) || arg < 0 || arg > source.length - i)
-          throw new PreviewError({ code: "rtf-binary-data" });
-        i += arg;
-      }
-      if (fallback > 0) {
-        fallback--;
-        continue;
-      }
       if (word === "fonttbl") {
         state.fontTable = true;
         state.skip = true;
@@ -723,7 +639,7 @@ export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
       else if (word === "fcharset" && state.fontTable) {
         const label = (
           {
-            0: "windows-1252",
+            0: state.decoder.encoding,
             1: state.decoder.encoding,
             77: "macintosh",
             128: "shift_jis",
@@ -743,13 +659,6 @@ export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
           } as Record<number, string>
         )[arg];
         if (label) fonts.set(state.font, new TextDecoder(label));
-      } else if (word === "fontfile") state.fontFile = true;
-      else if (word === "cpg" && state.fontTable && !state.fontFile) {
-        try {
-          fonts.set(state.font, new TextDecoder(rtfCodePageLabel(arg)));
-        } catch {
-          // An unknown font code page leaves the font on its \fcharset.
-        }
       } else if (
         [
           "colortbl",
@@ -772,10 +681,24 @@ export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
         ].includes(word!)
       )
         state.skip = true;
-      else if (word === "mac") state.decoder = new TextDecoder("macintosh");
-      else if (word === "ansicpg") {
+      else if (word === "bin") {
+        if (!Number.isSafeInteger(arg) || arg < 0 || arg > source.length - i)
+          throw new PreviewError({ code: "rtf-binary-data" });
+        i += arg;
+      } else if (word === "ansicpg") {
+        const label =
+          (
+            {
+              65001: "utf-8",
+              932: "shift_jis",
+              936: "gbk",
+              949: "euc-kr",
+              950: "big5",
+              874: "windows-874",
+            } as Record<number, string>
+          )[arg] ?? `windows-${arg}`;
         try {
-          state.decoder = new TextDecoder(rtfCodePageLabel(arg));
+          state.decoder = new TextDecoder(label);
         } catch {
           throw new PreviewError({ code: "rtf-code-page" });
         }
@@ -783,39 +706,16 @@ export function openRtf(bytes: ArrayBuffer): OfficeWorkerResult {
       else if (word === "i") state.italic = arg !== 0;
       else if (word === "ul") state.underline = arg !== 0;
       else if (word === "ulnone") state.underline = false;
-      else if (word === "deleted") state.deleted = arg !== 0;
-      else if (word === "v") state.hiddenText = arg !== 0;
       else if (word === "plain")
-        state = {
-          ...state,
-          deleted: false,
-          hiddenText: false,
-          bold: false,
-          italic: false,
-          underline: false,
-          font: defaultFont,
-        };
+        state = { ...state, bold: false, italic: false, underline: false, font: defaultFont };
       else if (word === "uc") state.uc = Math.max(0, Math.min(10, arg));
       else if (word === "u") {
         fallback = 0;
-        // TextEdit writes a soft line break as U+2028, where Chromium does not break the line.
-        if (arg !== 0x2028) emit(String.fromCharCode(arg < 0 ? arg + 65536 : arg));
-        else if (!hidden()) {
-          flush();
-          html += "<br>";
-        }
+        emit(String.fromCharCode(arg < 0 ? arg + 65536 : arg));
         fallback = state.uc;
-      } else if (!hidden() && word === "page") finishPage();
-      else if (word === "cell") emit("\t", state.skip);
-      else if (
-        (!state.skip && word === "row") ||
-        (!hidden() && (word === "par" || word === "line"))
-      )
-        html += "<br>";
-      // Writers usually end the paragraph before these breaks; a second break would add a blank line.
-      else if (!hidden() && (word === "sect" || word === "column")) {
-        if (html && !html.endsWith("<br>")) html += "<br>";
-      } else {
+      } else if (!state.skip && word === "page") finishPage();
+      else if (!state.skip && (word === "par" || word === "line" || word === "row")) html += "<br>";
+      else {
         const character = RTF_CHARACTERS.get(word!);
         if (character) emit(character);
       }

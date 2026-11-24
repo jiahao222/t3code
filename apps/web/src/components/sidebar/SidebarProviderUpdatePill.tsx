@@ -52,7 +52,7 @@ export function SidebarProviderUpdatePill() {
   const [renderedView, setRenderedView] = useState<ProviderUpdateSidebarPillView | null>(null);
   const [pendingView, setPendingView] = useState<ProviderUpdateSidebarPillView | null>(null);
   const [exitingKey, setExitingKey] = useState<string | null>(null);
-  const [dismissAfterExitKeys, setDismissAfterExitKeys] = useState<ReadonlyArray<string>>([]);
+  const [dismissAfterExitKey, setDismissAfterExitKey] = useState<string | null>(null);
   const [visibleAfterIso, setVisibleAfterIso] = useState<string | undefined>();
   const effectiveVisibleAfterIso = visibleAfterIso ?? latestProviderCheckedAt(providers);
   const view = getProviderUpdateSidebarPillView(
@@ -84,14 +84,14 @@ export function SidebarProviderUpdatePill() {
   const startExit = (
     key: string,
     nextView: ProviderUpdateSidebarPillView | null,
-    dismissKeys: ReadonlyArray<string> = [],
+    dismissKey?: string,
   ) => {
     if (exitingKey === key) {
       return;
     }
     setPendingView(nextView);
     setExitingKey(key);
-    setDismissAfterExitKeys(dismissKeys);
+    setDismissAfterExitKey(dismissKey ?? null);
   };
 
   if (exitingKey === null) {
@@ -106,18 +106,16 @@ export function SidebarProviderUpdatePill() {
     }
   }
 
-  const exitAfterVisible = useEffectEvent((key: string) =>
-    startExit(key, null, displayedView?.dismissKeys),
-  );
+  const exitAfterVisible = useEffectEvent((key: string) => startExit(key, null, key));
 
   const finishExit = useEffectEvent(() => {
-    if (dismissAfterExitKeys.length > 0) {
-      setDismissedKeys((previous) => new Set([...previous, ...dismissAfterExitKeys]));
+    if (dismissAfterExitKey !== null) {
+      setDismissedKeys((previous) => new Set(previous).add(dismissAfterExitKey));
     }
     setRenderedView(pendingView);
     setPendingView(null);
     setExitingKey(null);
-    setDismissAfterExitKeys([]);
+    setDismissAfterExitKey(null);
   });
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- fallback timer that finishes the exit if the CSS transition never ends
@@ -205,7 +203,7 @@ export function SidebarProviderUpdatePill() {
                 type="button"
                 aria-label={gt("Dismiss provider update notice")}
                 className="relative z-[1] mr-1 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md opacity-70 outline-none hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                onClick={() => startExit(displayedView.key, null, displayedView.dismissKeys)}
+                onClick={() => startExit(displayedView.key, null, displayedView.key)}
               >
                 <XIcon className="size-3.5 shrink-0" />
               </button>

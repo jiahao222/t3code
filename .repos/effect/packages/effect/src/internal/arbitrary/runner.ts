@@ -4,7 +4,6 @@ import type {
   CheckOptions,
   CheckResult,
   Exhausted,
-  GenerationDiagnostic,
   GlobalOptions,
   Passed,
   PropertyError,
@@ -193,15 +192,12 @@ const generateAttemptRaw = <A>(
   seed: SeedState,
   attempt: number,
   size: number,
-  shrinks: boolean,
-  diagnostics?: Array<GenerationDiagnostic>
+  shrinks: boolean
 ): Model.Generation<A> => {
   const biasFactor = 2 + Math.floor(Math.log10(attempt + 1))
   return generator.generate({
     size,
     shrinks,
-    diagnostics,
-    diagnosticPath: [],
     // This is fast-check v4.9.0's run-dependent numeric bias schedule (MIT). It makes short checks edge-heavy while
     // progressively dedicating more attempts to the complete domain, without becoming part of the public API.
     // https://github.com/dubzzz/fast-check/blob/v4.9.0/packages/fast-check/src/check/property/IRawProperty.ts#L92-L95
@@ -217,10 +213,9 @@ const generateAttempt = <A>(
   seed: SeedState,
   attempt: number,
   size: number,
-  shrinks: boolean,
-  diagnostics?: Array<GenerationDiagnostic>
+  shrinks: boolean
 ): Effect.Effect<Model.Attempt<A>> =>
-  Model.toEffectGeneration(generateAttemptRaw(generator, seed, attempt, size, shrinks, diagnostics))
+  Model.toEffectGeneration(generateAttemptRaw(generator, seed, attempt, size, shrinks))
 
 const resolveMasterSeed = (seed: string | number | undefined): Effect.Effect<string | number> =>
   seed === undefined ? Random.nextInt : Effect.succeed(seed)
@@ -336,13 +331,11 @@ export function array<A>(item: Arbitrary<A>, options?: ArrayOptions): Arbitrary<
 
 /** @internal */
 export function all(
-  input: Iterable<Arbitrary<any>> | Record<PropertyKey, Arbitrary<any>>
+  input: Iterable<Arbitrary<any>> | Record<string, Arbitrary<any>>
 ): Arbitrary<any> {
   const iterable = Symbol.iterator in input
-  const keys = iterable ? undefined : InternalRecord.ownEnumerableKeys(input)
-  const members = iterable
-    ? Array.from(input as Iterable<Arbitrary<any>>)
-    : keys!.map((key) => (input as Record<PropertyKey, Arbitrary<any>>)[key])
+  const keys = iterable ? undefined : Object.keys(input)
+  const members = iterable ? Array.from(input as Iterable<Arbitrary<any>>) : keys!.map((key) => input[key])
   const generators = members.map((member) => member.gen)
   let minCost = 0
   for (let index = 0; index < generators.length; index++) minCost += generators[index].minCost
@@ -375,7 +368,10 @@ function makeGenerationState(
   remaining: number
 ): Model.GenerationState {
   return {
-    ...state,
+    size: state.size,
+    shrinks: state.shrinks,
+    biasFactor: state.biasFactor,
+    nullPrototype: state.nullPrototype,
     random,
     budget: { remaining }
   }
@@ -486,23 +482,16 @@ export const sampleEffect = Effect.fnUntraced(function*<A>(self: Arbitrary<A>, o
   const seed = yield* resolveMasterSeed(seedOption)
   const seedState = hashSeed(seed)
   const values: Array<A> = []
-  const diagnostics: Array<GenerationDiagnostic> = []
   let discards = 0
   let attemptIndex = 0
   let attemptsSinceYield = 0
   while (values.length < count) {
-    const generated = generateAttemptRaw(self.gen, seedState, attemptIndex++, size, false, diagnostics)
+    const generated = generateAttemptRaw(self.gen, seedState, attemptIndex++, size, false)
     const attempt = Model.isAttempt(generated) ? generated : yield* generated
     if (attempt._tag === "Generated") {
       values.push(attempt.value)
     } else if (++discards > maxDiscards) {
-      const error: SampleError = {
-        _tag: "SampleError",
-        generated: values.length,
-        discards,
-        seed,
-        diagnostics: diagnostics.slice()
-      }
+      const error: SampleError = { _tag: "SampleError", generated: values.length, discards, seed }
       return yield* Effect.fail(error)
     }
     if (++attemptsSinceYield >= maxOpsBeforeYield) {
@@ -626,7 +615,6 @@ type SearchResult<A, E> = Passed | Exhausted | Found<A, E>
 // This gives both search strategies the sequential seed and size schedule, independently of evaluation timing.
 const makeSearch = <A>(self: Arbitrary<A>, options: SearchOptions) => {
   const seed = hashSeed(options.seed)
-  const diagnostics: Array<GenerationDiagnostic> = []
   let runs = 0
   let discards = 0
   let attemptIndex = 0
@@ -634,13 +622,11 @@ const makeSearch = <A>(self: Arbitrary<A>, options: SearchOptions) => {
     const size = options.runs === 1 ? options.size : Math.round(runs * options.size / (options.runs - 1))
     while (true) {
       const index = attemptIndex++
-      const sample = yield* generateAttempt(self.gen, seed, index, size, true, diagnostics)
+      const sample = yield* generateAttempt(self.gen, seed, index, size, true)
       if (sample._tag === "Generated") {
         return { sample, attempt: index, size, runs: ++runs, discards }
       }
-      if (++discards > options.maxDiscards) {
-        return { _tag: "Exhausted", runs, discards, seed: options.seed, diagnostics: diagnostics.slice() }
-      }
+      if (++discards > options.maxDiscards) return { _tag: "Exhausted", runs, discards, seed: options.seed }
       if (options.maxOpsBeforeYield <= 1 || discards % options.maxOpsBeforeYield === 0) yield* Effect.yieldNow
     }
   })

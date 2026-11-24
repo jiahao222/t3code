@@ -34,7 +34,6 @@ interface Scenario {
   readonly tcpv6ExitCode?: number;
   readonly wslpathMissing?: boolean;
   readonly reservedPorts?: ReadonlyArray<number>;
-  readonly host?: string;
 }
 
 const select = (scenario: Scenario) => {
@@ -93,7 +92,7 @@ const select = (scenario: Scenario) => {
   );
   return Effect.gen(function* () {
     const selectAutomaticPort = yield* AutomaticPort.make;
-    const port = yield* selectAutomaticPort(3773, scenario.host);
+    const port = yield* selectAutomaticPort(3773);
     return { port, commands };
   }).pipe(Effect.provide(layer));
 };
@@ -150,13 +149,12 @@ describe("automatic port selection", () => {
     }),
   );
 
-  it.effect("never queries Windows outside WSL or for a specific bind address", () =>
+  it.effect("never queries Windows outside WSL", () =>
     Effect.gen(function* () {
       for (const scenario of [
         { kernelRelease: "6.8.0-45-generic\n" },
         // macOS and Windows have no kernel release file.
         {},
-        { kernelRelease: WSL_KERNEL, windowsPorts: [3773], host: "100.64.0.7" },
       ] satisfies ReadonlyArray<Scenario>) {
         const result = yield* select(scenario);
         expect(result.port).toBe(3773);

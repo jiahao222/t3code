@@ -4,39 +4,19 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { describe, expect, it } from "vite-plus/test";
 
-import { splitPullRequestBody, type PullRequestBodySegment } from "./pullRequestMarkdown.ts";
 import {
   changeRequestReferenceAutolinker,
   resolveChangeRequestMediaUrl,
-} from "./pullRequestReferences.ts";
-
-const definitionParser = unified().use(remarkParse).use(remarkGfm);
-
-// The finder a client passes: each first definition, joined onto one line out of its quote.
-const split = (body: string) =>
-  splitPullRequestBody(body, (markdown) => {
-    const definitions = new Map<string, string>();
-    const visit = (node: Root | RootContent, quotes: number) => {
-      if (node.type === "definition" && !definitions.has(node.identifier)) {
-        const wrap = new RegExp(`(?:\\r\\n|\\r|\\n)(?:[ \\t]*>){0,${quotes}}[ \\t]*`, "gu");
-        const source = markdown.slice(node.position?.start.offset, node.position?.end.offset);
-        definitions.set(node.identifier, source.replace(wrap, " "));
-      }
-      if ("children" in node) {
-        for (const child of node.children)
-          visit(child, quotes + (node.type === "blockquote" ? 1 : 0));
-      }
-    };
-    visit(definitionParser.parse(markdown), 0);
-    return [...definitions.values()];
-  });
+  splitPullRequestBody,
+  type PullRequestBodySegment,
+} from "./pullRequestMarkdown.ts";
 
 describe("pull request body segmentation", () => {
   // GitHub writes a dropped image into the body as an `<img>` tag, so a bare attachment link on
   // its own line is the shape it uses for a video — every one sampled in the wild was one.
   it("lifts a dropped video out and keeps the prose around it", () => {
     expect(
-      split(
+      splitPullRequestBody(
         "Before\n\nhttps://github.com/user-attachments/assets/2f8c1a90-1b2c-4d5e-8f90-abcdef123456\n\nAfter",
       ),
     ).toEqual([
@@ -63,7 +43,7 @@ describe("pull request body segmentation", () => {
             ? segment.rows.flat().flatMap((cell) => prose(cell.segments))
             : [],
       );
-    const runs = prose(split(body));
+    const runs = prose(splitPullRequestBody(body));
     expect(runs.map((segment) => segment.text)).toEqual([
       "- [ ] Before",
       "    - [ ] code\n- [x] After",
@@ -79,7 +59,9 @@ describe("pull request body segmentation", () => {
 
   it("reads the source out of a video tag, including a multi-line one", () => {
     expect(
-      split('<video controls>\n  <source src="https://example.com/a.webm">\n</video>'),
+      splitPullRequestBody(
+        '<video controls>\n  <source src="https://example.com/a.webm">\n</video>',
+      ),
     ).toEqual([
       {
         id: "attachment:0",
@@ -93,21 +75,21 @@ describe("pull request body segmentation", () => {
   it("leaves the img tag GitHub writes for a dropped image as markdown", () => {
     const body =
       '<img width="1414" alt="image" src="https://github.com/user-attachments/assets/7195f963-51a9-4331-be74-3e06be760422" />';
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
 
   it("leaves an ordinary link alone, whether it is bare or written as markdown", () => {
     const body = "https://example.com/page\n\n[the docs](https://example.com/docs)";
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
 
   it("never lifts a link inside fenced code out of it", () => {
     const body = "```\nhttps://example.com/demo.mp4\n```";
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
@@ -115,14 +97,14 @@ describe("pull request body segmentation", () => {
   // GitHub keeps CRLF in a body written in its web editor.
   it("recognizes fences in a body with CRLF line endings", () => {
     const body = "```\r\nhttps://example.com/demo.mp4\r\n```";
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
 
   it("closes a CRLF fence, so a video after it still lifts out", () => {
     const code = '```html\r\n<video src="https://example.com/example.mp4"></video>\r\n```';
-    expect(split(`${code}\r\n\r\nhttps://example.com/demo.mp4\r\n`)).toEqual([
+    expect(splitPullRequestBody(`${code}\r\n\r\nhttps://example.com/demo.mp4\r\n`)).toEqual([
       { id: "markdown:0", kind: "markdown", text: code, sourceOffset: 0 },
       {
         id: "attachment:1",
@@ -135,26 +117,21 @@ describe("pull request body segmentation", () => {
 
   it("does not let a different fence marker close an open fence", () => {
     const body = "```\n~~~\nhttps://example.com/demo.mp4\n```";
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
 
   it("keeps a video tag that shares its line with prose as markdown", () => {
     const body = 'Before <video src="https://example.com/a.mp4"></video> after';
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
-    ]);
-    const captioned = '<video src="https://example.com/a.mp4"></video> Before the fix\n\nIt opens.';
-    expect(split(`${captioned}\n\n<video src="https://example.com/b.mp4"></video>`)).toEqual([
-      { id: "markdown:0", kind: "markdown", text: captioned, sourceOffset: 0 },
-      { id: "attachment:1", kind: "attachment", url: "https://example.com/b.mp4", media: "video" },
     ]);
   });
 
   it("treats an info-string fence as a nested opener, not a close", () => {
     const body = "```\n```javascript\nhttps://example.com/demo.mp4\n```";
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
@@ -162,7 +139,9 @@ describe("pull request body segmentation", () => {
   it("does not open a fence on a line of inline triple-backtick code", () => {
     const code = "```\nhttps://example.com/b.png\n```";
     expect(
-      split(`\`\`\`npm test\`\`\` passes.\n\nhttps://example.com/demo.mp4\n\n${code}`),
+      splitPullRequestBody(
+        `\`\`\`npm test\`\`\` passes.\n\nhttps://example.com/demo.mp4\n\n${code}`,
+      ),
     ).toEqual([
       { id: "markdown:0", kind: "markdown", text: "```npm test``` passes.", sourceOffset: 0 },
       {
@@ -174,14 +153,14 @@ describe("pull request body segmentation", () => {
       { id: "markdown:2", kind: "markdown", text: code, sourceOffset: 54 },
     ]);
     const multilineSpan = "```foo`\nhttps://example.com/demo.mp4\nbar```";
-    expect(split(multilineSpan)).toEqual([
+    expect(splitPullRequestBody(multilineSpan)).toEqual([
       { id: "markdown:0", kind: "markdown", text: multilineSpan, sourceOffset: 0 },
     ]);
   });
 
   it("leaves an indented code line alone even when it is only a video link", () => {
     const body = "    https://example.com/demo.mp4";
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
@@ -190,24 +169,14 @@ describe("pull request body segmentation", () => {
     const body = ['<video src="https://example.com/a.mp4">', "still prose", "more prose"].join(
       "\n",
     );
-    expect(split(body)).toEqual([
-      { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
-    ]);
-  });
-
-  it.each([
-    ["a whitespace run inside a line", `a${" ".repeat(1_000_000)}b`],
-    ["a run of unclosed video tags", `${"<video ".repeat(150_000)}</video>`],
-    ["a run of backticks before a line separator", `${"`".repeat(100_000)}\u2028x`],
-  ])("splits %s in one pass", (_case, body) => {
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
 
   it("refuses a non-http source rather than making a link out of it", () => {
     const body = '<video src="javascript:alert(1)"></video>';
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
@@ -227,7 +196,7 @@ describe("reference links around lifted media", () => {
     );
   // Each segment renders as its own document; the first definition of a label wins, as in mdast-util-to-hast.
   const referenceLinks = (body: string) =>
-    prose(split(body)).flatMap((text) => {
+    prose(splitPullRequestBody(body)).flatMap((text) => {
       const definitions = new Map<string, string>();
       const references: Array<{ identifier: string; text: string }> = [];
       const visit = (node: Root | RootContent) => {
@@ -275,18 +244,6 @@ describe("reference links around lifted media", () => {
     ).toEqual([["the docs", "https://example.com/first"]]);
   });
 
-  it("renders the body whole when its definitions would be repeated past the budget", () => {
-    const definitions = Array.from(
-      { length: 400 },
-      (_, index) => `[d${index}]: https://example.com/${"x".repeat(60)}${index}`,
-    ).join("\n");
-    const uses = Array.from({ length: 1200 }, () => `[use][d1]\n${recording}`).join("\n");
-    const body = `\n${definitions}\n\n${uses}\n`;
-    expect(split(body)).toEqual([
-      { id: "markdown:0", kind: "markdown", text: body.trim(), sourceOffset: 1 },
-    ]);
-  });
-
   it("leaves a definition shown in code as code", () => {
     expect(
       referenceLinks(
@@ -297,7 +254,7 @@ describe("reference links around lifted media", () => {
 
   it("still writes a task tick back to its place in the body", () => {
     const body = `[guide]: https://example.com/docs\n\n${recording}\n\n- [ ] Read [the docs][guide]`;
-    const segment = split(body).at(-1)!;
+    const segment = splitPullRequestBody(body).at(-1)!;
     if (segment.kind !== "markdown") throw new Error("expected prose last");
     const marker = segment.text.indexOf("[ ]");
     expect(body.slice(segment.sourceOffset + marker)).toBe("[ ] Read [the docs][guide]");
@@ -310,13 +267,15 @@ describe("media on custom hosts", () => {
     ["[Recording](https://drop.example.com/recording.mov)", "video"],
     ["<https://drop.example.com/shot.webp>", "image"],
   ])("recognizes %s without a request", (body, media) => {
-    expect(split(body)).toEqual([expect.objectContaining({ kind: "attachment", media })]);
+    expect(splitPullRequestBody(body)).toEqual([
+      expect.objectContaining({ kind: "attachment", media }),
+    ]);
   });
 
   it("keeps inline links and media examples in code as prose", () => {
     const body =
       "See [recording](https://drop.example.com/a.mp4) for context.\n\n```md\nhttps://drop.example.com/a.png\n```";
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
@@ -328,7 +287,7 @@ describe("media tables", () => {
   const video = "https://example.com/a.mp4";
 
   it("keeps GitHub's before/after video table together, splitting each cell on its own", () => {
-    const segments = split(
+    const segments = splitPullRequestBody(
       `Intro\n\n<table>\n<tr><th>Before</th><th>After</th></tr>\n<tr>\n<td>\n\n${before}\n\n</td>\n<td>\n\n${after}\n\n</td>\n</tr>\n</table>\n\nOutro`,
     );
     expect(segments.map((segment) => segment.kind)).toEqual(["markdown", "table", "markdown"]);
@@ -354,7 +313,7 @@ describe("media tables", () => {
   });
 
   it("keeps a quoted `>` inside a cell's attributes out of its text", () => {
-    const [table] = split(
+    const [table] = splitPullRequestBody(
       `<table>\n<tr><td title="Before > after">Caption</td><td>\n\n${video}\n\n</td></tr>\n</table>`,
     );
     expect(table).toMatchObject({
@@ -365,7 +324,7 @@ describe("media tables", () => {
 
   it("leaves a table without media links as markdown", () => {
     const body = "<table>\n<tr><td>a</td><td>b</td></tr>\n</table>";
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body, sourceOffset: 0 },
     ]);
   });
@@ -397,7 +356,7 @@ describe("media tables", () => {
     ],
   ])("splits a media table with %s line by line, as before", (_name, open, close) => {
     const body = `${open}\n\n${video}\n\n${close}`;
-    expect(split(body)).toEqual([
+    expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: open, sourceOffset: 0 },
       { id: "attachment:1", kind: "attachment", url: video, media: "video" },
       ...(close

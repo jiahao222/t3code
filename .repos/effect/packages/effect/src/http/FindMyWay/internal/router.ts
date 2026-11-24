@@ -40,17 +40,7 @@ interface Route<A = unknown> {
   readonly pattern: string
   readonly handler: A
   readonly params: ReadonlyArray<string>
-  readonly fallback: boolean
 }
-
-/**
- * Registers `handler` at `path` unless a route is already declared there. A
- * route declared there later replaces it.
- *
- * @internal
- */
-export const onFallback = <A>(router: Router.Router<A>, method: string, path: Router.PathInput, handler: A): void =>
-  (router as RouterImpl<A>).on(method === "*" ? httpMethods : method, path, handler, true)
 
 /**
  * @internal
@@ -65,8 +55,6 @@ export const getMaxParamLengthExceeded = <A>(router: Router.Router<A>): number |
   return impl.maxParamLengthExceeded ? impl.options.maxParamLength : undefined
 }
 
-type Options = { readonly [K in keyof Router.RouterConfig]-?: Exclude<Router.RouterConfig[K], undefined> }
-
 class RouterImpl<A> implements Router.Router<A> {
   constructor(options: Partial<Router.RouterConfig> = {}) {
     this.options = {
@@ -74,13 +62,11 @@ class RouterImpl<A> implements Router.Router<A> {
       ignoreDuplicateSlashes: true,
       caseSensitive: false,
       maxParamLength: 100,
-      ...options,
-      useSemicolonDelimiter: options.useSemicolonDelimiter !== false,
-      decodeStaticPath: options.decodeStaticPath !== false
+      ...options
     }
   }
 
-  readonly options: Options
+  readonly options: Router.RouterConfig
   maxParamLengthExceeded = false
   routes: Array<Route> = []
   trees: Record<string, StaticNode> = Object.create(null)
@@ -93,8 +79,7 @@ class RouterImpl<A> implements Router.Router<A> {
   on(
     method: string | Iterable<string>,
     path: Router.PathInput,
-    handler: A,
-    fallback = false
+    handler: A
   ): void {
     const optionalParamMatch = path.match(OPTIONAL_PARAM_REGEXP)
     if (optionalParamMatch && optionalParamMatch.index !== undefined) {
@@ -112,8 +97,8 @@ class RouterImpl<A> implements Router.Router<A> {
         "$2"
       ) || "/") as Router.PathInput
 
-      this.on(method, pathFull, handler, fallback)
-      this.on(method, pathOptional, handler, fallback)
+      this.on(method, pathFull, handler)
+      this.on(method, pathOptional, handler)
       return
     }
 
@@ -127,7 +112,7 @@ class RouterImpl<A> implements Router.Router<A> {
 
     const methods = typeof method === "string" ? [method] : method
     for (const method of methods) {
-      this._on(method, path, handler, fallback)
+      this._on(method, path, handler)
     }
   }
 
@@ -135,7 +120,7 @@ class RouterImpl<A> implements Router.Router<A> {
     this.on(httpMethods, path, handler)
   }
 
-  private _on(method: string, path: Router.PathInput, handler: A, fallback: boolean): void {
+  private _on(method: string, path: Router.PathInput, handler: A): void {
     if (this.trees[method] === undefined) {
       this.trees[method] = new StaticNode("/")
     }
@@ -170,7 +155,8 @@ class RouterImpl<A> implements Router.Router<A> {
         if (!this.options.caseSensitive) {
           staticNodePath = staticNodePath.toLowerCase()
         }
-        staticNodePath = this.escapePercent(staticNodePath.split("::").join(":"))
+        staticNodePath = staticNodePath.split("::").join(":")
+        staticNodePath = staticNodePath.split("%").join("%25")
         // add the static part of the route to the tree
         currentNode = (currentNode as StaticNode).createStaticChild(
           staticNodePath
@@ -224,7 +210,8 @@ class RouterImpl<A> implements Router.Router<A> {
 
             let staticPart = pattern.slice(staticPartStartIndex, j)
             if (staticPart) {
-              staticPart = this.escapePercent(staticPart.split("::").join(":"))
+              staticPart = staticPart.split("::").join(":")
+              staticPart = staticPart.split("%").join("%25")
               regexps.push(backtrack = escapeRegExp(staticPart))
             }
 
@@ -275,28 +262,21 @@ class RouterImpl<A> implements Router.Router<A> {
       pattern = "/*"
     }
 
-    const route = { method, path, pattern, params, handler, fallback }
-    for (let i = 0; i < this.routes.length; i++) {
-      const existRoute = this.routes[i]
-      if (existRoute.method !== method || existRoute.pattern !== pattern) continue
-      // Different regex nodes can share a normalized pattern.
-      if (currentNode.routes?.includes(existRoute)) {
-        if (fallback) return
-        if (existRoute.fallback) {
-          this.routes[i] = route
-          currentNode.replaceRoute(route)
-          return
-        }
+    for (const existRoute of this.routes) {
+      if (existRoute.method === method && existRoute.pattern === pattern) {
+        throw new Error(
+          `Method '${method}' already declared for route '${pattern}'`
+        )
       }
-      throw new Error(`Method '${method}' already declared for route '${pattern}'`)
     }
 
+    const route = { method, path, pattern, params, handler }
     this.routes.push(route)
     currentNode.addRoute(route)
 
     // Cache static routes by normalized path for direct lookup.
     if (params.length === 0) {
-      const staticKey = this.escapePercent(pattern.split("::").join(":"))
+      const staticKey = pattern.split("::").join(":").split("%").join("%25")
       const store = this.staticRoutes[method] ??= new Map()
       if (!store.has(staticKey)) {
         store.set(staticKey, currentNode.handlerStorage!.unconstrainedHandler!)
@@ -308,7 +288,7 @@ class RouterImpl<A> implements Router.Router<A> {
         if (!this.options.caseSensitive) {
           prefix = prefix.toLowerCase()
         }
-        prefix = this.escapePercent(prefix)
+        prefix = prefix.split("%").join("%25")
         const store = this.singleParamRoutes[method] ??= new Map()
         if (!store.has(prefix)) {
           store.set(prefix, currentNode.handlerStorage!.unconstrainedHandler!)
@@ -319,11 +299,6 @@ class RouterImpl<A> implements Router.Router<A> {
       this.singleParamDisabled[method] = true
       delete this.singleParamRoutes[method]
     }
-  }
-
-  // Decoded lookups see a literal % in the request as %25.
-  private escapePercent(path: string): string {
-    return this.options.decodeStaticPath ? path.split("%").join("%25") : path
   }
 
   has(method: string, path: string): boolean {
@@ -346,8 +321,7 @@ class RouterImpl<A> implements Router.Router<A> {
     if (currentNode === undefined) return undefined
 
     let querystring = ""
-    let decodeParam: ((param: string) => string | undefined) | undefined
-    const useSemicolonDelimiter = this.options.useSemicolonDelimiter
+    let shouldDecodeParam = false
 
     // Skip normalization for canonical lowercase paths.
     let clean = path.charCodeAt(0) === 47 &&
@@ -356,7 +330,7 @@ class RouterImpl<A> implements Router.Router<A> {
       for (let i = 1; i < path.length; i++) {
         const code = path.charCodeAt(i)
         if (
-          code === 37 || code === 63 || (code === 59 && useSemicolonDelimiter) || code === 35 ||
+          code === 37 || code === 63 || code === 59 || code === 35 ||
           (code >= 65 && code <= 90) ||
           (code === 47 && path.charCodeAt(i - 1) === 47)
         ) {
@@ -372,24 +346,14 @@ class RouterImpl<A> implements Router.Router<A> {
         path = path.replace(FULL_PATH_REGEXP, "/")
       }
 
-      if (this.options.decodeStaticPath) {
-        try {
-          const sanitizedUrl = safeDecodeURI(path, useSemicolonDelimiter)
-          path = sanitizedUrl.path
-          querystring = sanitizedUrl.querystring
-          if (sanitizedUrl.shouldDecodeParam) {
-            decodeParam = safeDecodeURIComponent
-          }
-        } catch {
-          return undefined
-        }
-      } else {
-        const end = pathEnd(path, useSemicolonDelimiter)
-        querystring = path.slice(end + 1)
-        path = path.slice(0, end)
-        if (path.includes("%")) {
-          decodeParam = tryDecodeURIComponent
-        }
+      let sanitizedUrl
+      try {
+        sanitizedUrl = safeDecodeURI(path)
+        path = sanitizedUrl.path
+        querystring = sanitizedUrl.querystring
+        shouldDecodeParam = sanitizedUrl.shouldDecodeParam
+      } catch (error) {
+        return undefined
       }
 
       if (this.options.ignoreDuplicateSlashes) {
@@ -426,27 +390,24 @@ class RouterImpl<A> implements Router.Router<A> {
       const prefixLength = path.lastIndexOf("/") + 1
       const handle = singleParamStore.get(path.slice(0, prefixLength))
       if (handle !== undefined && path.length > prefixLength) {
-        let param: string | undefined = originPath.slice(prefixLength)
-        if (decodeParam !== undefined) {
-          param = decodeParam(param)
+        let param = originPath.slice(prefixLength)
+        if (shouldDecodeParam) {
+          param = safeDecodeURIComponent(param)
         }
-        // A malformed escape falls through to the tree, where another route may match.
-        if (param !== undefined) {
-          if (param.length <= maxParamLength) {
-            this.singleParamArray[0] = param
-            return {
-              handler: handle.handler as A,
-              params: handle.createParams(this.singleParamArray),
-              searchParams: QS.parse(querystring)
-            } as const
-          }
-          this.maxParamLengthExceeded = true
+        if (param.length <= maxParamLength) {
+          this.singleParamArray[0] = param
+          return {
+            handler: handle.handler as A,
+            params: handle.createParams(this.singleParamArray),
+            searchParams: QS.parse(querystring)
+          } as const
         }
+        this.maxParamLengthExceeded = true
       }
     }
 
     let pathIndex = (currentNode as StaticNode).prefix.length
-    const params: Array<string> = []
+    const params = []
     const pathLen = path.length
 
     // Reuse this router's synchronous backtracking stack.
@@ -472,79 +433,105 @@ class RouterImpl<A> implements Router.Router<A> {
         params.length
       )
 
-      while (true) {
-        // No child matched, or its parameter did not: resume from the next brother node.
-        if (node === undefined) {
-          if (brothersNodesStack.length === 0) {
-            return undefined
-          }
-
-          const brotherNodeState = brothersNodesStack.pop()!
-          pathIndex = brotherNodeState.brotherPathIndex
-          params.splice(brotherNodeState.paramsCount)
-          node = brotherNodeState.brotherNode
+      if (node === undefined) {
+        if (brothersNodesStack.length === 0) {
+          return undefined
         }
 
-        if (node._tag === "StaticNode") {
-          pathIndex += node.prefix.length
+        const brotherNodeState = brothersNodesStack.pop()!
+        pathIndex = brotherNodeState.brotherPathIndex
+        params.splice(brotherNodeState.paramsCount)
+        node = brotherNodeState.brotherNode
+      }
+
+      currentNode = node
+
+      while (true) {
+        if (currentNode._tag === "StaticNode") {
+          pathIndex += currentNode.prefix.length
           break
         }
 
-        const isWildcard = node._tag === "WildcardNode"
-        let paramEndIndex = isWildcard ? pathLen : originPath.indexOf("/", pathIndex)
+        if (currentNode._tag === "WildcardNode") {
+          let param = originPath.slice(pathIndex)
+          if (shouldDecodeParam) {
+            param = safeDecodeURIComponent(param)
+          }
+
+          params.push(param)
+          pathIndex = pathLen
+          break
+        }
+
+        let paramEndIndex = originPath.indexOf("/", pathIndex)
         if (paramEndIndex === -1) {
           paramEndIndex = pathLen
         }
 
-        let param: string | undefined = originPath.slice(pathIndex, paramEndIndex)
-        if (decodeParam !== undefined) {
-          param = decodeParam(param)
+        let param = originPath.slice(pathIndex, paramEndIndex)
+        if (shouldDecodeParam) {
+          param = safeDecodeURIComponent(param)
         }
 
-        if (param !== undefined && this.pushParam(node, param, params)) {
-          pathIndex = paramEndIndex
-          break
+        if (currentNode.regex !== undefined) {
+          const matchedParameters: RegExpExecArray | null = currentNode.regex.exec(param)
+          if (matchedParameters === null) {
+            if (brothersNodesStack.length === 0) {
+              return undefined
+            }
+
+            const brotherNodeState = brothersNodesStack.pop()!
+            pathIndex = brotherNodeState.brotherPathIndex
+            params.splice(brotherNodeState.paramsCount)
+            currentNode = brotherNodeState.brotherNode
+            continue
+          }
+
+          let maxParamLengthExceeded = false
+          for (let i = 1; i < matchedParameters.length; i++) {
+            const matchedParam = matchedParameters[i] ?? ""
+            if (matchedParam.length > maxParamLength) {
+              maxParamLengthExceeded = true
+              this.maxParamLengthExceeded = true
+              break
+            }
+          }
+
+          if (maxParamLengthExceeded) {
+            if (brothersNodesStack.length === 0) {
+              return undefined
+            }
+
+            const brotherNodeState = brothersNodesStack.pop()!
+            pathIndex = brotherNodeState.brotherPathIndex
+            params.splice(brotherNodeState.paramsCount)
+            currentNode = brotherNodeState.brotherNode
+            continue
+          }
+
+          for (let i = 1; i < matchedParameters.length; i++) {
+            params.push(matchedParameters[i] ?? "")
+          }
+        } else {
+          if (param.length > maxParamLength) {
+            this.maxParamLengthExceeded = true
+            if (brothersNodesStack.length === 0) {
+              return undefined
+            }
+
+            const brotherNodeState = brothersNodesStack.pop()!
+            pathIndex = brotherNodeState.brotherPathIndex
+            params.splice(brotherNodeState.paramsCount)
+            currentNode = brotherNodeState.brotherNode
+            continue
+          }
+          params.push(param)
         }
 
-        node = undefined
-      }
-
-      currentNode = node
-    }
-  }
-
-  private pushParam(node: ParametricNode | WildcardNode, param: string, params: Array<string>): boolean {
-    if (node._tag === "WildcardNode") {
-      params.push(param)
-      return true
-    }
-
-    const maxParamLength = this.options.maxParamLength
-    if (node.regex === undefined) {
-      if (param.length > maxParamLength) {
-        this.maxParamLengthExceeded = true
-        return false
-      }
-      params.push(param)
-      return true
-    }
-
-    const matchedParameters = node.regex.exec(param)
-    if (matchedParameters === null) {
-      return false
-    }
-
-    for (let i = 1; i < matchedParameters.length; i++) {
-      if ((matchedParameters[i] ?? "").length > maxParamLength) {
-        this.maxParamLengthExceeded = true
-        return false
+        pathIndex = paramEndIndex
+        break
       }
     }
-
-    for (let i = 1; i < matchedParameters.length; i++) {
-      params.push(matchedParameters[i] ?? "")
-    }
-    return true
   }
 }
 
@@ -553,9 +540,9 @@ class RouterImpl<A> implements Router.Router<A> {
 // ----------------------------------------------------------------------------
 
 interface Handler {
-  params: ReadonlyArray<string>
-  handler: unknown
-  createParams: (
+  readonly params: ReadonlyArray<string>
+  readonly handler: unknown
+  readonly createParams: (
     paramsArray: ReadonlyArray<string>
   ) => Record<string, string>
 }
@@ -576,14 +563,6 @@ class HandlerStorage {
     }
     this.handlers.push(handler)
     this.unconstrainedHandler = this.handlers[0]
-  }
-
-  // The lookup caches hold this handler by reference, so update it in place.
-  replace(route: Route) {
-    const handler = this.unconstrainedHandler!
-    handler.params = route.params
-    handler.handler = route.handler
-    handler.createParams = makeCreateParams(route.params)
   }
 }
 
@@ -616,11 +595,6 @@ abstract class NodeBase {
     }
     this.isLeafNode = true
     this.handlerStorage.add(route)
-  }
-
-  replaceRoute(route: Route) {
-    this.routes = [route]
-    this.handlerStorage!.replace(route)
   }
 
   abstract getNextNode(
@@ -975,23 +949,11 @@ function decodeComponentChar(highCharCode: number, lowCharCode: number) {
   return undefined
 }
 
-function pathEnd(path: string, useSemicolonDelimiter: boolean): number {
-  for (let i = 1; i < path.length; i++) {
-    const charCode = path.charCodeAt(i)
-    if (charCode === 63 || charCode === 35 || (charCode === 59 && useSemicolonDelimiter)) {
-      return i
-    }
-  }
-  return path.length
-}
-
-function safeDecodeURI(path: string, useSemicolonDelimiter: boolean) {
+function safeDecodeURI(path: string) {
   let shouldDecode = false
   let shouldDecodeParam = false
 
   let querystring = ""
-  let escaped = ""
-  let escapedEnd = 0
 
   for (let i = 1; i < path.length; i++) {
     const charCode = path.charCodeAt(i)
@@ -1004,41 +966,27 @@ function safeDecodeURI(path: string, useSemicolonDelimiter: boolean) {
         shouldDecode = true
       } else {
         shouldDecodeParam = true
-        // %25 - encoded % char. We need to encode one more time to prevent double decoding.
-        // Append the escaped text instead of rewriting `path`, which copies the whole path
-        // for every escape (find-my-way PR #455).
+        // %25 - encoded % char. We need to encode one more time to prevent double decoding
         if (highCharCode === 50 && lowCharCode === 53) {
           shouldDecode = true
-          escaped += path.slice(escapedEnd, i) + "%2525"
-          escapedEnd = i + 3
+          path = path.slice(0, i + 1) + "25" + path.slice(i + 1)
+          i += 2
         }
         i += 2
       }
       // Some systems do not follow RFC and separate the path and query
       // string with a `;` character (code 59), e.g. `/foo;jsessionid=123456`.
-      // Thus, we split on `;` as well as `?` and `#` unless disabled.
-    } else if (charCode === 63 || (charCode === 59 && useSemicolonDelimiter) || charCode === 35) {
+      // Thus, we need to split on `;` as well as `?` and `#`.
+    } else if (charCode === 63 || charCode === 59 || charCode === 35) {
       querystring = path.slice(i + 1)
       path = path.slice(0, i)
       break
     }
   }
-  if (escapedEnd > 0) {
-    path = escaped + path.slice(escapedEnd)
-  }
   const decodedPath = shouldDecode ? decodeURI(path) : path
   return { path: decodedPath, querystring, shouldDecodeParam } as const
 }
 
-function tryDecodeURIComponent(uriComponent: string): string | undefined {
-  try {
-    return decodeURIComponent(uriComponent)
-  } catch {
-    return undefined
-  }
-}
-
-// Second decoding pass: expects safeDecodeURI to have decoded every other escape.
 function safeDecodeURIComponent(uriComponent: string) {
   const startIndex = uriComponent.indexOf("%")
   if (startIndex === -1) return uriComponent

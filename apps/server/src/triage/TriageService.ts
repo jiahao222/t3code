@@ -142,60 +142,17 @@ const make = Effect.gen(function* () {
   // Commits with a clone running, so sessions started meanwhile share it.
   const cloning = new Set<string>();
 
-  // The playbook's own layout: one folder per commit under the source cache, so
-  // the agent finds and reuses this clone instead of making another. The folder
-  // appears only once the clone is complete.
   const startSourceClone = Effect.fn("TriageService.startSourceClone")(function* () {
-    yield* fs.makeDirectory(sourceDir, { recursive: true });
-    const source = yield* resolveSource();
-    if (source === undefined) {
-      return {
-        _tag: "failed",
-        serverVersion,
-        reason: "the repository listed neither the release tag nor main.",
-      } satisfies TriageSourceClone;
-    }
-    const directory = path.join(sourceDir, source.commit);
-    if (yield* fs.exists(directory)) {
-      // Our clones appear only when complete, but an agent may have cloned
-      // here by hand and stopped partway.
-      // Without its own .git, rev-parse would read a parent repository.
-      const head = (yield* fs.exists(path.join(directory, ".git")))
-        ? yield* runGit("checkSource", directory, ["rev-parse", "HEAD"], 10_000).pipe(
-            Effect.map((result) => result.stdout.trim()),
-            Effect.orElseSucceed(() => ""),
-          )
-        : "";
-      return head === source.commit
-        ? ({ _tag: "cloned", directory, serverVersion, ...source } as const)
-        : ({
-            _tag: "failed",
-            serverVersion,
-            reason: `${directory} exists but is not a complete checkout of ${source.commit}. Remove it first.`,
-          } satisfies TriageSourceClone);
-    }
-    if (!cloning.has(source.commit)) {
-      cloning.add(source.commit);
-      yield* cloneSource(source.commit).pipe(
-        Effect.ignoreCause({ log: true }),
-        Effect.ensuring(Effect.sync(() => cloning.delete(source.commit))),
-        Effect.forkIn(serviceScope),
-      );
-    }
-    return { _tag: "cloning", directory, serverVersion, ...source } as const;
+    return {
+      _tag: "failed",
+      serverVersion,
+      reason: "Remote T3 repository cloning is disabled in local-only mode.",
+    } satisfies TriageSourceClone;
   });
 
   const prepare: TriageService["Service"]["prepare"] = Effect.fn("TriageService.prepare")(
     function* (input) {
-      const sourceClone = yield* startSourceClone().pipe(
-        Effect.catch((error) =>
-          Effect.succeed<TriageSourceClone>({
-            _tag: "failed",
-            serverVersion,
-            reason: error.message,
-          }),
-        ),
-      );
+      const sourceClone = yield* startSourceClone();
       const session = yield* writeTriageSession({
         baseDir: config.baseDir,
         paths: config,

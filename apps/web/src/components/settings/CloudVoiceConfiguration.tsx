@@ -1,7 +1,6 @@
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { cloudSpeechDisclosure } from "@t3tools/shared/speechCopy";
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
-import { hasFeatureFlag } from "@t3tools/client-runtime/state/server";
 import {
   configuredSecretSources,
   secretRequestReference,
@@ -13,7 +12,6 @@ import {
 } from "@t3tools/client-runtime/voice-input";
 import {
   AuthOrchestrationOperateScope,
-  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   CloudSpeechApiKey,
   CloudSpeechModelId,
@@ -33,6 +31,7 @@ import type { HttpClient } from "effect/http";
 import { Atom, AsyncResult } from "effect/reactivity";
 import { useId, useState } from "react";
 import { T, useGT, useMessages, Var } from "gt-react";
+import { isSecretsFeatureEnabled } from "../../env";
 import {
   inEnvironmentSpeechRuntime,
   runEnvironmentSpeech,
@@ -177,7 +176,6 @@ export function CloudVoiceConfiguration({
   const prepared = Option.getOrNull(usePreparedConnection(id));
   const canUse = useEnvironmentScope(id, AuthOrchestrationOperateScope);
   const canManage = useEnvironmentScope(id, AuthSettingsWriteScope);
-  const canUseReferences = useEnvironmentScope(id, AuthProvidersManageScope);
   const [presence, refresh] = useCloudRead(canUse ? prepared : null, getCloudSpeechKeys);
   const [models, refreshModels] = useCloudRead(
     routed && canUse ? prepared : null,
@@ -196,9 +194,7 @@ export function CloudVoiceConfiguration({
   const saved = AsyncResult.isSuccess(presence) ? presence.value?.[provider] : undefined;
   const existing = environment.serverConfig?.settings?.cloudSpeechCredentials?.[provider];
   const sources =
-    canUseReferences &&
-    hasFeatureFlag(environment.serverConfig, "secretProviders") &&
-    environment.serverConfig?.secretReferences
+    isSecretsFeatureEnabled && environment.serverConfig?.secretReferences
       ? configuredSecretSources(environment.serverConfig.settings?.secretProviders ?? {}, messages)
       : [];
   const reference =

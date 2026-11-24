@@ -10,25 +10,6 @@
  * creating effects, combining them, handling failures, managing resources, and
  * running effect programs.
  *
- * A fiber runs in either an interruptible or an uninterruptible region.
- * `interruptible`, `uninterruptible`, and `uninterruptibleMask` change the
- * region for the effect they wrap.
- *
- * Interrupting a fiber records a request. In an interruptible region the
- * fiber stops its current work. In an uninterruptible region it continues
- * until it next enters an interruptible region, where the request takes effect.
- *
- * An interrupted fiber skips ordinary continuations and failure handlers in
- * interruptible regions. By default, `onExit` runs cleanup and `Scope.close`
- * runs registered finalizers in an uninterruptible region.
- *
- * Fork and run APIs start fibers in an interruptible region by default,
- * regardless of the caller's region. Concurrent `all` and `forEach` effects
- * inherit the caller's region. Any contender a race or timeout starts is
- * initially interruptible.
- *
- * `Fiber.interrupt` waits for the fiber to finish, including its cleanup.
- *
  * @stability stable
  * @since 2.0.0
  */
@@ -356,7 +337,7 @@ export declare namespace All {
    * @since 2.0.0
    */
   export type ReturnObject<T, Discard extends boolean, Mode extends boolean = false> = [T] extends [
-    Record<PropertyKey, EffectAny>
+    Record<string, EffectAny>
   ] ? Effect<
       Discard extends true ? void
         : {
@@ -396,7 +377,7 @@ export declare namespace All {
    * @since 2.0.0
    */
   export type Return<
-    Arg extends Iterable<EffectAny> | Record<PropertyKey, EffectAny>,
+    Arg extends Iterable<EffectAny> | Record<string, EffectAny>,
     O extends {
       readonly concurrency?: Concurrency | undefined
       readonly discard?: boolean | undefined
@@ -404,7 +385,7 @@ export declare namespace All {
     }
   > = [Arg] extends [ReadonlyArray<EffectAny>] ? ReturnTuple<Arg, IsDiscard<O>, IsResult<O>>
     : [Arg] extends [Iterable<EffectAny>] ? ReturnIterable<Arg, IsDiscard<O>, IsResult<O>>
-    : [Arg] extends [Record<PropertyKey, EffectAny>] ? ReturnObject<Arg, IsDiscard<O>, IsResult<O>>
+    : [Arg] extends [Record<string, EffectAny>] ? ReturnObject<Arg, IsDiscard<O>, IsResult<O>>
     : never
 
   type ObjectValues<T> = T extends unknown ? T[keyof T] : never
@@ -425,8 +406,6 @@ export declare namespace All {
  * results under the same keys. By default, the combined effect fails on the
  * first failure; with concurrent execution, effects that have already started
  * may be interrupted, while effects not yet started are skipped.
- * Record inputs use own enumerable string and symbol properties.
- * Non-enumerable and inherited properties are ignored.
  *
  * Options:
  *
@@ -434,18 +413,6 @@ export declare namespace All {
  * `mode: "result"` to run every effect and collect each success or failure as a
  * `Result` in the same output shape. Use `discard: true` to ignore successful
  * values and return `void`.
- *
- * With concurrent execution, a failure requests interruption of other effects
- * that have already started. The returned effect waits for those fibers to finish,
- * including their finalizers. Uninterruptible regions can delay completion.
- * This fail-fast behavior does not apply to `mode: "result"`. Concurrent
- * effects inherit the surrounding region's interruptibility.
- *
- * **Gotchas**
- *
- * Waiting for fiber cleanup does not ensure external work stops: a Promise
- * can keep running unless the operation honors cancellation. Fibers started
- * with `forkDetach` are not awaited.
  *
  * **Example** (Collecting tuple results in order)
  *
@@ -540,7 +507,7 @@ export declare namespace All {
 export const all: <
   const Arg extends
     | Iterable<Effect<any, any, any>>
-    | Record<PropertyKey, Effect<any, any, any>>,
+    | Record<string, Effect<any, any, any>>,
   O extends {
     readonly concurrency?: Concurrency | undefined
     readonly discard?: boolean | undefined
@@ -776,8 +743,8 @@ export const findFirstFilter: {
  * The `forEach` function applies a provided operation to each element in the
  * iterable, producing a new effect that returns an array of results.
  *
- * If any effect fails, the iteration short-circuits and propagates the error
- * after cleanup.
+ * If any effect fails, the iteration stops immediately (short-circuiting), and
+ * the error is propagated.
  *
  * Concurrency:
  *
@@ -788,17 +755,6 @@ export const findFirstFilter: {
  *
  * If the `discard` option is set to `true`, the intermediate results are not
  * collected, and the final result of the operation is `void`.
- *
- * With concurrent execution, a failure requests interruption of other effects
- * that have already started. The returned effect waits for those fibers to finish,
- * including their finalizers. Uninterruptible regions can delay completion.
- * Concurrent effects inherit the surrounding region's interruptibility.
- *
- * **Gotchas**
- *
- * Waiting for fiber cleanup does not ensure external work stops: a Promise
- * can keep running unless the operation honors cancellation. Fibers started
- * with `forkDetach` are not awaited.
  *
  * **Example** (Mapping over an iterable with effects)
  *
@@ -1137,11 +1093,6 @@ export const succeedSome: <A>(value: A) => Effect<Option<A>> = internal.succeedS
  * functions, and helping TypeScript unify return types when branches construct
  * different effects. Any side effects or scoped captures inside the thunk are
  * re-executed on each invocation.
- *
- * **Gotchas**
- *
- * If the thunk throws, the thrown value is treated as a defect, not as a typed
- * failure. Use `Effect.try` when a throw should become a typed failure.
  *
  * **Example** (Lazily evaluating side effects)
  *
@@ -2474,8 +2425,9 @@ export const option: <A, E, R>(self: Effect<A, E, R>) => Effect<Option<A>, never
  * `exit` wraps an effect's success or failure inside an `Exit` type, allowing
  * you to handle both cases explicitly.
  *
- * If the running fiber is interrupted in an interruptible region, `exit`
- * does not turn that interruption into an `Exit` value.
+ * The resulting effect cannot fail because the failure is encapsulated within
+ * the `Exit.Failure` type. The error type is set to `never`, indicating that
+ * the effect is structured to never fail directly.
  *
  * **Example** (Capturing completion as Exit)
  *
@@ -2493,7 +2445,6 @@ export const option: <A, E, R>(self: Effect<A, E, R>) => Effect<Option<A>, never
  * Effect.runSync(program2) // => Exit.fail("Something went wrong")
  * ```
  *
- * @see {@link catchCause} for fiber interruption versus interruption in a cause
  * @see {@link option} for a version that uses `Option` instead.
  * @see {@link result} for a version that uses `Result` instead.
  *
@@ -3400,7 +3351,8 @@ export const unwrapReason: {
 } = internal.unwrapReason
 
 /**
- * Runs a recovery effect with the full cause of failure.
+ * Handles both recoverable and unrecoverable errors by providing a recovery
+ * effect.
  *
  * **When to use**
  *
@@ -3410,15 +3362,7 @@ export const unwrapReason: {
  *
  * **Details**
  *
- * The handler can recover from an interruption in the cause, such as one from
- * `Effect.interrupt` or from joining an interrupted fiber.
- *
- * Interruption of the fiber running `catchCause` is different. In an
- * interruptible region, the handler is skipped and the fiber runs its cleanup
- * before exiting. A handler in an uninterruptible region can handle an
- * interruption delivered in an inner interruptible region. A pending request
- * alone neither invokes that handler nor adds an interruption to an unrelated
- * failure while the fiber remains uninterruptible.
+ * When to Recover from Defects:
  *
  * Defects are unexpected errors that typically shouldn't be recovered from, as
  * they often indicate serious issues. However, in some cases, such as
@@ -3700,9 +3644,6 @@ export const catchNoSuchElement: <A, E, R>(
  * that match a specific predicate. This is useful when you want to handle
  * only certain types of errors while letting others propagate.
  *
- * The failure handler is skipped if the running fiber is interrupted in an
- * interruptible region.
- *
  * **Example** (Recovering from selected causes)
  *
  * ```ts import.meta.vitest
@@ -3760,9 +3701,6 @@ export const catchCauseIf: {
  * The filter is applied to the full `Cause`. When it succeeds, the handler
  * receives the selected value and the original cause. When it fails, the effect
  * re-fails with the residual cause returned by the filter.
- *
- * The failure handler is skipped if the running fiber is interrupted in an
- * interruptible region.
  *
  * @see {@link catchCauseIf} for predicate-based cause selection
  * @see {@link catchFilter} for filtering typed error values instead of full causes
@@ -4037,9 +3975,6 @@ export const tapErrorTag: {
  * the operation succeeds, the original cause is preserved. If the operation
  * fails, its error is also represented in the returned effect.
  *
- * The observer is skipped if the running fiber is interrupted in an
- * interruptible region.
- *
  * **Example** (Observing full failure causes)
  *
  * ```ts import.meta.vitest
@@ -4056,8 +3991,6 @@ export const tapErrorTag: {
  * void output.push(Effect.runSyncExit(program))
  * output // => ["Logging cause: Something went wrong", Exit.fail("Something went wrong")]
  * ```
- *
- * @see {@link catchCause} for fiber interruption versus interruption in a cause
  *
  * @stability stable
  * @category error handling
@@ -4082,9 +4015,6 @@ export const tapCause: {
  * the cause matches a specific predicate. This is useful for conditional logging,
  * monitoring, or other side effects based on the type of failure.
  *
- * The observer is skipped if the running fiber is interrupted in an
- * interruptible region.
- *
  * **Example** (Observing selected failure causes)
  *
  * ```ts import.meta.vitest
@@ -4103,8 +4033,6 @@ export const tapCause: {
  * void output.push(Effect.runSyncExit(program))
  * output // => ["Logging failure cause: Network timeout", Exit.fail("Network timeout")]
  * ```
- *
- * @see {@link catchCause} for fiber interruption versus interruption in a cause
  *
  * @stability stable
  * @category error handling
@@ -4137,10 +4065,6 @@ export const tapCauseIf: {
  * original cause. A failed filter result skips the side effect and preserves the
  * original cause.
  *
- * The observer is skipped if the running fiber is interrupted in an
- * interruptible region.
- *
- * @see {@link catchCause} for fiber interruption versus interruption in a cause
  * @see {@link tapCauseIf} for selecting causes with a boolean predicate
  * @see {@link tapCause} for observing every failure cause
  * @see {@link catchCauseFilter} for recovering from selected causes instead of only observing them
@@ -4307,8 +4231,6 @@ export declare namespace Retry {
  * succeeds, the returned effect succeeds with that value. If the policy stops
  * while the effect is still failing, the last failure is propagated.
  *
- * Scheduled delays use the context's `Clock`.
- *
  * **Gotchas**
  *
  * The source effect is always evaluated once before any retry policy is
@@ -4387,8 +4309,6 @@ export const retry: {
  * If the retries are exhausted and the effect still fails, it runs a fallback
  * effect instead.
  *
- * Scheduled delays use the context's `Clock`.
- *
  * **Gotchas**
  *
  * Defects take precedence over typed errors. A failure whose cause contains a
@@ -4456,9 +4376,6 @@ export const retryOrElse: {
  * failures, defects, and interruptions. Use `Effect.catch(Effect.failCause)` to
  * restore the original typed error channel after cause-level handling.
  *
- * Interrupting the running fiber in an interruptible region bypasses the
- * error channel.
- *
  * **Example** (Exposing failures as causes)
  *
  * ```ts import.meta.vitest
@@ -4474,8 +4391,6 @@ export const retryOrElse: {
  *
  * Effect.runSync(program) // => "Caught cause: Something went wrong"
  * ```
- *
- * @see {@link catchCause} for fiber interruption versus interruption in a cause
  *
  * @stability stable
  * @category error handling
@@ -4840,24 +4755,13 @@ export const firstSuccessOf: <Eff extends Effect<any, any, any>>(
  *
  * The `timeout` function allows you to specify a time limit for an
  * effect's execution. If the effect does not complete within the given time, a
- * `TimeoutError` is raised after the source fiber finishes its cleanup.
- *
- * Any contender the timeout starts (source or timer) is initially
- * interruptible, even when the timeout runs in an uninterruptible region. The
- * timer uses the context's `Clock`.
+ * `TimeoutError` is raised. This can be useful for controlling how long your
+ * program waits for a task to finish, ensuring that it doesn't hang
+ * indefinitely if the task takes too long.
  *
  * **Gotchas**
  *
- * If the timeout wins, the source is interrupted and the returned effect waits
- * for the source fiber to finish, including its finalizers. The duration
- * determines when interruption is requested, not a deadline for completion.
- * If the source enters its own uninterruptible region, completion can be
- * delayed until that region finishes. The eventual source result is
- * discarded and the timeout failure is still returned.
- *
- * Waiting for fiber cleanup does not ensure external work stops: a Promise
- * can keep running unless the operation honors cancellation. Fibers started
- * with `forkDetach` are not awaited.
+ * If the timeout wins, the source effect is interrupted.
  *
  * **Example** (Failing when work takes too long)
  *
@@ -4901,23 +4805,6 @@ export const timeout: {
  * interrupted and the returned effect succeeds with `Option.none`. If the
  * source effect fails before the timeout, that failure is preserved.
  *
- * Any contender the timeout starts (source or timer) is initially
- * interruptible, even when the timeout runs in an uninterruptible region. The
- * timer uses the context's `Clock`.
- *
- * **Gotchas**
- *
- * If the timeout wins, the source is interrupted and the returned effect waits
- * for the source fiber to finish, including its finalizers. The duration
- * determines when interruption is requested, not a deadline for completion.
- * If the source enters its own uninterruptible region, completion can be
- * delayed until that region finishes. The eventual source result is
- * discarded and the timeout still produces `Option.none`.
- *
- * Waiting for fiber cleanup does not ensure external work stops: a Promise
- * can keep running unless the operation honors cancellation. Fibers started
- * with `forkDetach` are not awaited.
- *
  * **Example** (Returning None on timeout)
  *
  * ```ts import.meta.vitest
@@ -4946,26 +4833,7 @@ export const timeoutOption: {
 
 /**
  * Applies a timeout to an effect, lazily evaluating `orElse` after interrupting
- * the source and waiting for its cleanup if the timeout is reached.
- *
- * **Details**
- *
- * Any contender the timeout starts (source or timer) is initially
- * interruptible, even when the timeout runs in an uninterruptible region. The
- * timer uses the context's `Clock`.
- *
- * **Gotchas**
- *
- * If the timeout wins, the source is interrupted and the returned effect waits
- * for the source fiber to finish, including its finalizers. The duration
- * determines when interruption is requested, not a deadline for completion.
- * If the source enters its own uninterruptible region, completion can be
- * delayed until that region finishes. The eventual source result is
- * discarded and the timeout still selects `orElse`.
- *
- * Waiting for fiber cleanup does not ensure external work stops: a Promise
- * can keep running unless the operation honors cancellation. Fibers started
- * with `forkDetach` are not awaited.
+ * the source if the timeout is reached.
  *
  * **Example** (Falling back on timeout)
  *
@@ -5006,8 +4874,8 @@ export const timeoutOrElse: {
 } = internal.timeoutOrElse
 
 /**
- * Delays the start of an effect by the specified duration using the context's
- * `Clock`.
+ * Returns an effect that is delayed from this effect by the specified
+ * `Duration`.
  *
  * **Example** (Delaying an effect)
  *
@@ -5021,7 +4889,6 @@ export const timeoutOrElse: {
  * output // => ["Delayed message"]
  * ```
  *
- * @see {@link sleep} for waiting with the current clock
  * @stability stable
  * @category delays & timeouts
  * @since 2.0.0
@@ -5038,7 +4905,7 @@ export const delay: {
 
 /**
  * Returns an effect that suspends the current fiber for the specified duration
- * using the context's `Clock`, without blocking a JavaScript thread.
+ * without blocking a JavaScript thread.
  *
  * **Example** (Pausing without blocking)
  *
@@ -5105,24 +4972,9 @@ export const timed: <A, E, R>(self: Effect<A, E, R>) => Effect<[duration: Durati
  * **Details**
  *
  * Early failures do not finish the race; `raceAll` keeps waiting until one
- * effect succeeds or every effect has failed. If one succeeds, any
- * still-running contenders are interrupted. If every effect fails, the
- * returned effect fails with a cause containing the collected failure reasons.
- *
- * Any contender the race starts is initially interruptible, even when the race
- * runs in an uninterruptible region.
- *
- * The returned effect completes only after the interrupted participants have
- * finished, including their finalizers.
- *
- * **Gotchas**
- *
- * If a losing effect enters its own uninterruptible region, the race waits
- * for that region to finish. The losing result is discarded.
- *
- * Waiting for fiber cleanup does not ensure external work stops: a Promise
- * can keep running unless the operation honors cancellation. Fibers started
- * with `forkDetach` are not awaited.
+ * effect succeeds or every effect has failed. When one effect succeeds, the
+ * remaining effects are interrupted. If every effect fails, the returned effect
+ * fails with a cause containing the collected failure reasons.
  *
  * **Example** (Racing many effects)
  *
@@ -5158,24 +5010,9 @@ export const raceAll: <Eff extends Effect<any, any, any>>(
  *
  * **Details**
  *
- * The race requests interruption of any still-running losers. Use `raceAll`
- * when early failures should be ignored until a success occurs or all effects
- * fail.
- *
- * Any contender the race starts is initially interruptible, even when the race
- * runs in an uninterruptible region.
- *
- * The returned effect completes only after the interrupted participants have
- * finished, including their finalizers.
- *
- * **Gotchas**
- *
- * If a losing effect enters its own uninterruptible region, the race waits
- * for that region to finish. The losing result is discarded.
- *
- * Waiting for fiber cleanup does not ensure external work stops: a Promise
- * can keep running unless the operation honors cancellation. Fibers started
- * with `forkDetach` are not awaited.
+ * After the first effect completes, all remaining effects are interrupted. Use
+ * `raceAll` when early failures should be ignored until a success occurs or
+ * all effects fail.
  *
  * **Example** (Taking the first settled result)
  *
@@ -5209,23 +5046,8 @@ export const raceAllFirst: <Eff extends Effect<any, any, any>>(
  *
  * **Details**
  *
- * If one effect succeeds, `onWinner` can observe the winning fiber. The other
- * effect is interrupted if it is still running. If both fail, the race fails.
- *
- * Any contender the race starts is initially interruptible, even when the race
- * runs in an uninterruptible region.
- *
- * The returned effect completes only after the interrupted participants have
- * finished, including their finalizers.
- *
- * **Gotchas**
- *
- * If a losing effect enters its own uninterruptible region, the race waits
- * for that region to finish. The losing result is discarded.
- *
- * Waiting for fiber cleanup does not ensure external work stops: a Promise
- * can keep running unless the operation honors cancellation. Fibers started
- * with `forkDetach` are not awaited.
+ * If one effect succeeds, the other is interrupted and `onWinner` can observe the
+ * winning fiber. If both fail, the race fails.
  *
  * **Example** (Racing two effects)
  *
@@ -5275,27 +5097,12 @@ export const race: {
  *
  * **When to use**
  *
- * Use when any completion, including failure, should decide the race.
+ * Use when any completion, including failure, should decide the race and
+ * interrupt the losing effect.
  *
  * **Details**
  *
- * The losing effect is interrupted if it is still running. `onWinner` can
- * observe the winning fiber.
- *
- * Any contender the race starts is initially interruptible, even when the race
- * runs in an uninterruptible region.
- *
- * The returned effect completes only after the interrupted participants have
- * finished, including their finalizers.
- *
- * **Gotchas**
- *
- * If a losing effect enters its own uninterruptible region, the race waits
- * for that region to finish. The losing result is discarded.
- *
- * Waiting for fiber cleanup does not ensure external work stops: a Promise
- * can keep running unless the operation honors cancellation. Fibers started
- * with `forkDetach` are not awaited.
+ * The losing effect is interrupted, and `onWinner` can observe the winning fiber.
  *
  * **Example** (Observing the winning fiber)
  *
@@ -5860,9 +5667,6 @@ export const matchEager: {
  * The `matchCause` function allows you to handle failures with access to the
  * full cause of the failure within a fiber.
  *
- * The failure handler is skipped if the running fiber is interrupted in an
- * interruptible region.
- *
  * **Example** (Matching on success or failure causes)
  *
  * ```ts import.meta.vitest
@@ -5878,7 +5682,6 @@ export const matchEager: {
  * Effect.runSync(program) // => "Failed: Something went wrong"
  * ```
  *
- * @see {@link catchCause} for fiber interruption versus interruption in a cause
  * @see {@link matchCauseEffect} if you need to perform side effects in the
  * handlers.
  * @see {@link match} if you don't need to handle the cause of the failure.
@@ -5914,9 +5717,6 @@ export const matchCause: {
  * effects by immediately applying the matching function instead of deferring it
  * through the effect pipeline.
  *
- * Unless the effect is already an `Exit`, the failure handler is skipped if
- * the running fiber is interrupted in an interruptible region.
- *
  * **Example** (Eagerly matching already completed effects)
  *
  * ```ts import.meta.vitest
@@ -5928,8 +5728,6 @@ export const matchCause: {
  * })
  * Effect.runSync(handleResult) // => "Success: 42"
  * ```
- *
- * @see {@link catchCause} for fiber interruption versus interruption in a cause
  *
  * @stability stable
  * @category pattern matching
@@ -5962,10 +5760,6 @@ export const matchCauseEager: {
  * If the effect is an `Exit`, the matching handler runs immediately; otherwise it behaves like
  * {@link matchCauseEffect}.
  *
- * Unless the effect is already an `Exit`, the failure handler is skipped if
- * the running fiber is interrupted in an interruptible region.
- *
- * @see {@link catchCause} for fiber interruption versus interruption in a cause
  * @see {@link matchCauseEffect} for the non-eager effectful variant
  * @see {@link matchCauseEager} for eager cause matching with pure handlers
  * @see {@link matchEffect} for effectful matching on typed failures instead of full causes
@@ -6007,9 +5801,6 @@ export const matchCauseEffectEager: {
  * you to respond accordingly while performing side effects (like logging or
  * other operations).
  *
- * The failure handler is skipped if the running fiber is interrupted in an
- * interruptible region.
- *
  * **Example** (Effectfully matching on causes)
  *
  * ```ts import.meta.vitest
@@ -6045,7 +5836,6 @@ export const matchCauseEffectEager: {
  * output // => ["Handling error: Task failed", "recovered from error"]
  * ```
  *
- * @see {@link catchCause} for fiber interruption versus interruption in a cause
  * @see {@link matchCause} if you don't need side effects and only want to handle the result or failure.
  * @see {@link matchEffect} if you don't need to handle the cause of the failure.
  *
@@ -7019,10 +6809,9 @@ export const scopedWith: <A, E, R>(
  *
  * **Details**
  *
- * After successful acquisition, release is registered on the scope. If the
- * scope is open, `Scope.close` runs it according to the scope's finalizer
- * strategy and passes it the closing `Exit`. If the scope is already closed,
- * release runs immediately with that `Exit`.
+ * If acquisition succeeds, the release finalizer is added to the current scope
+ * and is guaranteed to run when that scope closes. The finalizer receives the
+ * `Exit` value used to close the scope.
  *
  * By default, acquisition is protected by an uninterruptible region. Pass
  * `{ interruptible: true }` to allow the acquisition effect to be interrupted.
@@ -7153,12 +6942,8 @@ export const acquireDisposable: <A extends AsyncDisposable | Disposable, E, R>(
  *      and will be executed as long as the acquisition `Effect` value
  *      successfully acquires the resource.
  *
- * `use` runs with the interruptibility of the surrounding region. In an
- * interruptible region, it can be interrupted, and `release` receives an `Exit`
- * whose cause contains the interruption. In an uninterruptible region, `use`
- * runs to completion unless it explicitly restores interruptibility.
- *
- * The returned effect waits for release to finish, including when interrupted.
+ * During the time period between the acquisition and release of the resource,
+ * the `use` `Effect` value will be executed.
  *
  * If the `release` `Effect` value fails, then the entire `Effect` value will
  * fail, even if the `use` `Effect` value succeeds. If this fail-fast behavior
@@ -7229,9 +7014,8 @@ export const acquireUseRelease: <Resource, E, R, A, E2, R2, E3, R3>(
  *
  * **Details**
  *
- * If the scope is open, `Scope.close` runs the finalizer according to the
- * scope's finalizer strategy and passes it the closing `Exit`. If the scope is
- * already closed, the finalizer runs immediately with that `Exit`.
+ * The finalizer runs when the surrounding scope is closed and receives the
+ * `Exit` value used to close the scope.
  *
  * **Example** (Registering scope finalizers)
  *
@@ -7279,11 +7063,11 @@ export const addFinalizer: <R>(
  *
  * **Details**
  *
+ * For use cases that need access to the effect's result, see `onExit`.
+ *
  * Finalizers offer very powerful guarantees, but they are low-level, and
  * should generally not be used for releasing resources. For higher-level
  * logic built on `ensuring`, see the `acquireRelease` family of methods.
- *
- * Like {@link onExit} cleanup, the finalizer runs in an uninterruptible region.
  *
  * **Example** (Always running cleanup)
  *
@@ -7363,10 +7147,6 @@ export const onError: {
  * Runs the finalizer only when this effect fails and the `Cause` matches the
  * provided predicate.
  *
- * **Details**
- *
- * Like {@link onExit} cleanup, the finalizer runs in an uninterruptible region.
- *
  * **Example** (Running cleanup for selected failures)
  *
  * ```ts import.meta.vitest
@@ -7412,10 +7192,6 @@ export const onErrorIf: {
  * Use when cleanup or diagnostics should run only for failures whose full
  * `Cause` is accepted or transformed by a `Filter`, and the finalizer needs the
  * filter's pass value plus the original cause.
- *
- * **Details**
- *
- * Like {@link onExit} cleanup, the finalizer runs in an uninterruptible region.
  *
  * @see {@link onError} for cleanup on every failure
  * @see {@link onErrorIf} for selecting failures with a boolean predicate
@@ -7473,15 +7249,6 @@ export const onExitPrimitive: <A, E, R, XE = never, XR = never>(
  *
  * If both the effect and the cleanup function fail, the two causes are merged.
  *
- * Cleanup runs in an uninterruptible region. `Fiber.interrupt` waits for it
- * to finish. Wrap a part of cleanup in `Effect.interruptible` to allow that
- * part to be interrupted.
- *
- * **Gotchas**
- *
- * If interruption is already pending, a part of cleanup wrapped in
- * `Effect.interruptible` is interrupted before it starts.
- *
  * **Example** (Observing every exit)
  *
  * ```ts import.meta.vitest
@@ -7518,10 +7285,6 @@ export const onExit: {
 /**
  * Runs the cleanup effect only when the `Exit` satisfies the provided
  * predicate.
- *
- * **Details**
- *
- * Like {@link onExit} cleanup, the finalizer runs in an uninterruptible region.
  *
  * **Example** (Observing selected exits)
  *
@@ -7571,8 +7334,6 @@ export const onExitIf: {
  *
  * `Result.fail` skips cleanup, and `Result.succeed` runs cleanup with the
  * selected value and the original `Exit`.
- *
- * Like {@link onExit} cleanup, the finalizer runs in an uninterruptible region.
  *
  * @see {@link onExit} for cleanup on every exit
  * @see {@link onExitIf} for selecting exits with a boolean predicate
@@ -7833,8 +7594,7 @@ export const cachedInvalidateWithTTL: {
 // -----------------------------------------------------------------------------
 
 /**
- * Fails with an `Interrupt` reason that names the current fiber. This does not
- * request interruption of the fiber itself, so a cause handler can recover.
+ * Returns an effect that is immediately interrupted.
  *
  * **Example** (Creating an interrupted effect)
  *
@@ -7849,8 +7609,6 @@ export const cachedInvalidateWithTTL: {
  * Effect.runSyncExit(program)._tag // => "Failure"
  * ```
  *
- * @see {@link catchCause} for recovering from an interruption in the cause
- *
  * @stability stable
  * @category interruption
  * @since 2.0.0
@@ -7858,12 +7616,7 @@ export const cachedInvalidateWithTTL: {
 export const interrupt: Effect<never> = internal.interrupt
 
 /**
- * Runs an effect in an interruptible region.
- *
- * **Details**
- *
- * If interruption is pending when the fiber enters this region, it takes
- * effect before the wrapped effect starts.
+ * Returns a new effect that allows the effect to be interruptible.
  *
  * **Example** (Allowing interruption)
  *
@@ -7876,8 +7629,6 @@ export const interrupt: Effect<never> = internal.interrupt
  * await Effect.runPromise(program) // => Option.none()
  * ```
  *
- * @see {@link uninterruptible} for how regions defer interruption
- *
  * @stability stable
  * @category interruption
  * @since 2.0.0
@@ -7888,10 +7639,6 @@ export const interruptible: <A, E, R>(
 
 /**
  * Runs the specified finalizer effect if this effect is interrupted.
- *
- * **Details**
- *
- * Like {@link onExit} cleanup, the finalizer runs in an uninterruptible region.
  *
  * **Example** (Running cleanup on interruption)
  *
@@ -7926,13 +7673,7 @@ export const onInterrupt: {
 } = internal.onInterrupt
 
 /**
- * Runs an effect in an uninterruptible region.
- *
- * **Details**
- *
- * An interruption request remains pending while the fiber is uninterruptible.
- * It takes effect when the fiber returns to an interruptible region or enters
- * one explicitly with `interruptible`.
+ * Returns a new effect that disables interruption for the given effect.
  *
  * **Example** (Preventing interruption)
  *
@@ -7963,12 +7704,6 @@ export const uninterruptible: <A, E, R>(
  * Disables interruption and provides a restore function to restore the
  * interruptible state within the effect.
  *
- * **Details**
- *
- * `restore(effect)` runs `effect` in the surrounding region. If that region
- * was interruptible, a pending interruption takes effect before `effect`
- * starts; if it was uninterruptible, the request remains pending.
- *
  * **Example** (Restoring interruption in protected regions)
  *
  * ```ts import.meta.vitest
@@ -7993,8 +7728,6 @@ export const uninterruptible: <A, E, R>(
  * output // => ["Uninterruptible phase...", "Interruptible phase...", "Back to uninterruptible"]
  * ```
  *
- * @see {@link uninterruptible} for how regions defer interruption
- *
  * @stability stable
  * @category interruption
  * @since 2.0.0
@@ -8008,11 +7741,6 @@ export const uninterruptibleMask: <A, E, R>(
 /**
  * Runs an effect in an interruptible region while providing `restore` for
  * locally restoring the previous interruptibility.
- *
- * **Details**
- *
- * A pending interruption takes effect when the fiber enters the interruptible
- * region. Otherwise, `restore` can run a section in the surrounding region.
  *
  * **Example** (Controlling interruptibility locally)
  *
@@ -8034,11 +7762,9 @@ export const uninterruptibleMask: <A, E, R>(
  *   })
  * )
  *
- * Effect.runSync(Effect.uninterruptible(program))
+ * Effect.runSync(program)
  * output // => ["Interruptible phase...", "Uninterruptible phase...", "Back to interruptible"]
  * ```
- *
- * @see {@link uninterruptible} for how regions defer interruption
  *
  * @stability stable
  * @category interruption
@@ -8185,7 +7911,9 @@ export const forever: <
  * If the effect succeeds, it is repeated according to the schedule. If it
  * fails, the repetition stops immediately, and the failure is returned.
  *
- * Delays between repetitions use the context's `Clock`.
+ * The schedule can also specify delays between repetitions, making it useful
+ * for tasks like retrying operations with backoff, periodic execution, or
+ * performing a series of dependent actions.
  *
  * You can combine schedules for more advanced repetition logic, such as adding
  * delays, limiting recursions, or dynamically adjusting based on the outcome of
@@ -8288,8 +8016,6 @@ export const repeat: {
  * and the latest schedule metadata when at least one schedule step has run;
  * otherwise it receives `None`. If the schedule completes normally, the
  * returned effect succeeds with the schedule's output.
- *
- * Scheduled delays use the context's `Clock`.
  *
  * **Gotchas**
  *
@@ -8439,8 +8165,6 @@ export const replicateEffect: {
  * fails, and otherwise succeeds with the schedule output when the schedule
  * completes.
  *
- * Scheduled delays use the context's `Clock`.
- *
  * **Example** (Scheduling repeated execution)
  *
  * ```ts import.meta.vitest
@@ -8489,8 +8213,6 @@ export const schedule: {
  * fed back into the schedule to decide whether to continue. The returned effect
  * succeeds with the schedule output when the schedule completes and fails if
  * the effect or schedule fails.
- *
- * Scheduled delays use the context's `Clock`.
  *
  * **Example** (Scheduling from an initial value)
  *
@@ -9168,7 +8890,9 @@ export const requestUnsafe: <A extends Request.Any>(
 // -----------------------------------------------------------------------------
 
 /**
- * Forks this effect into a child fiber and returns its handle.
+ * Returns an effect that forks this effect into its own separate fiber,
+ * returning the fiber immediately, without waiting for it to begin executing
+ * the effect.
  *
  * **Details**
  *
@@ -9187,18 +8911,6 @@ export const requestUnsafe: <A extends Request.Any>(
  * terminates, the child fiber will be terminated as well, ensuring that no
  * fibers leak. This behavior is called "auto supervision", and if this
  * behavior is not desired, you may use the `forkDetach` or `forkIn` methods.
- *
- * Fork options:
- *
- * - `startImmediately` defaults to `false`: the fork returns before the new
- *   fiber runs, without promising a scheduler turn. With `true`, the fiber
- *   runs synchronously until it suspends, yields, or completes before the fork
- *   returns.
- * - `uninterruptible` defaults to `false`, even in an uninterruptible caller.
- *   With `true`, the fiber starts uninterruptible: `Fiber.interrupt` waits for
- *   completion without replacing its result. Explicit `Effect.interruptible`
- *   regions can still be interrupted. `"inherit"` copies the caller's
- *   interruptibility at the fork.
  *
  * **Example** (Forking a child fiber)
  *
@@ -9240,33 +8952,6 @@ export const forkChild: <
 /**
  * Forks the effect in the specified scope. The fiber will be interrupted
  * when the scope is closed.
- *
- * **Details**
- *
- * The scope owns the fiber, not the forker: it can outlive the forker's
- * completion or interruption. Closing the scope from another fiber interrupts
- * it and waits for completion, including finalizers.
- *
- * Forking and registration are interruption-safe: interrupting the forker
- * cannot leave the new fiber outside the scope. If the scope is already
- * closed, the effect is not started and the returned fiber is interrupted.
- *
- * Fork options:
- *
- * - `startImmediately` defaults to `false`: the fork returns before the new
- *   fiber runs, without promising a scheduler turn. With `true`, the fiber
- *   runs synchronously until it suspends, yields, or completes before the fork
- *   returns.
- * - `uninterruptible` defaults to `false`, even in an uninterruptible caller.
- *   With `true`, the fiber starts uninterruptible: `Fiber.interrupt` waits for
- *   completion without replacing its result. Explicit `Effect.interruptible`
- *   regions can still be interrupted. `"inherit"` copies the caller's
- *   interruptibility at the fork.
- *
- * **Gotchas**
- *
- * A fiber that closes its own scope is not interrupted or awaited by that
- * close. An uninterruptible fiber can delay scope closure.
  *
  * **Example** (Forking into a supplied scope)
  *
@@ -9311,33 +8996,6 @@ export const forkIn: {
 
 /**
  * Forks the fiber in a `Scope`, interrupting it when the scope is closed.
- *
- * **Details**
- *
- * The scope owns the fiber, not the forker: it can outlive the forker's
- * completion or interruption. Closing the scope from another fiber interrupts
- * it and waits for completion, including finalizers.
- *
- * Forking and registration are interruption-safe: interrupting the forker
- * cannot leave the new fiber outside the scope. If the scope is already
- * closed, the effect is not started and the returned fiber is interrupted.
- *
- * Fork options:
- *
- * - `startImmediately` defaults to `false`: the fork returns before the new
- *   fiber runs, without promising a scheduler turn. With `true`, the fiber
- *   runs synchronously until it suspends, yields, or completes before the fork
- *   returns.
- * - `uninterruptible` defaults to `false`, even in an uninterruptible caller.
- *   With `true`, the fiber starts uninterruptible: `Fiber.interrupt` waits for
- *   completion without replacing its result. Explicit `Effect.interruptible`
- *   regions can still be interrupted. `"inherit"` copies the caller's
- *   interruptibility at the fork.
- *
- * **Gotchas**
- *
- * A fiber that closes its own scope is not interrupted or awaited by that
- * close. An uninterruptible fiber can delay scope closure.
  *
  * **Example** (Forking into the current scope)
  *
@@ -9388,18 +9046,6 @@ export const forkScoped: <
  * The detached fiber inherits the forking fiber's context. It continues running
  * until it completes or is explicitly interrupted through the returned handle,
  * even after the forking fiber terminates.
- *
- * Fork options:
- *
- * - `startImmediately` defaults to `false`: the fork returns before the new
- *   fiber runs, without promising a scheduler turn. With `true`, the fiber
- *   runs synchronously until it suspends, yields, or completes before the fork
- *   returns.
- * - `uninterruptible` defaults to `false`, even in an uninterruptible caller.
- *   With `true`, the fiber starts uninterruptible: `Fiber.interrupt` waits for
- *   completion without replacing its result. Explicit `Effect.interruptible`
- *   regions can still be interrupted. `"inherit"` copies the caller's
- *   interruptibility at the fork.
  *
  * **Example** (Forking a detached fiber)
  *
@@ -9523,9 +9169,9 @@ export const fiberId: Effect<number> = internal.fiberId
  *
  * **Details**
  *
- * `signal` can interrupt the fiber, and `scheduler` provides the scheduler
- * service. The fiber starts interruptible unless `uninterruptible: true` is
- * set.
+ * `signal` interrupts the fiber, `scheduler` provides the scheduler service,
+ * `uninterruptible` starts the fiber uninterruptibly, and `onFiberStart`
+ * receives the created fiber.
  *
  * @see {@link runFork} for starting a fiber with these options
  * @see {@link runCallback} for callback-based running with these options
@@ -9551,12 +9197,6 @@ export interface RunOptions {
  *
  * Use when you need to start an effect in the background and receive a fiber.
  *
- * **Details**
- *
- * The fiber starts immediately and runs synchronously until it suspends,
- * yields, or completes. It starts interruptible unless `uninterruptible: true`
- * is set.
- *
  * **Example** (Running an effect in the background)
  *
  * ```ts import.meta.vitest
@@ -9575,8 +9215,6 @@ export interface RunOptions {
  * output // => ["running...", "done"]
  * ```
  *
- * @see {@link RunOptions} for configuring the fiber
- * @see {@link forkChild} for starting a child of the current fiber
  * @stability stable
  * @category running
  * @since 2.0.0
@@ -9591,12 +9229,6 @@ export const runFork: <A, E>(effect: Effect<A, E, never>, options?: RunOptions |
  *
  * Use when an effect still requires services, you already have a `Context`, and
  * you want a background fiber.
- *
- * **Details**
- *
- * The fiber starts immediately and runs synchronously until it suspends,
- * yields, or completes. It starts interruptible unless `uninterruptible: true`
- * is set.
  *
  * **Example** (Running with services in the background)
  *
@@ -9625,8 +9257,6 @@ export const runFork: <A, E>(effect: Effect<A, E, never>, options?: RunOptions |
  * output // => ["Hello from service!", "done"]
  * ```
  *
- * @see {@link RunOptions} for configuring the fiber
- * @see {@link forkChild} for starting a child of the current fiber
  * @stability stable
  * @category running
  * @since 4.0.0
@@ -16302,8 +15932,6 @@ export const tx = <A, E, R>(
           if (!internal.hasInterruptsOnly(cause)) return sync(() => clearTransaction(mutable))
           return restore(awaitPendingTransaction(mutable))
         }),
-        // A body that recovers the txRetry interrupt succeeds with retry still set, so wait here too.
-        tap(() => mutable.retry ? restore(awaitPendingTransaction(mutable)) : void_),
         exit
       )
       return flatMap(

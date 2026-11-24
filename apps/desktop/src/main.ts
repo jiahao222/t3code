@@ -1,5 +1,8 @@
+import { installElectronEgressGuard } from "./electron/ElectronEgressGuard.ts";
 import * as MacPermissions from "./permissions/MacPermissions.ts";
 import { handleStdioError } from "./app/stdioErrors.ts";
+
+installElectronEgressGuard();
 
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", handleStdioError);
@@ -71,7 +74,6 @@ import * as DesktopUpdatePolicy from "./updates/DesktopUpdatePolicy.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
 import * as BrowserImport from "./preview/BrowserImport/BrowserImport.ts";
 import * as LinuxBrowserSecret from "./preview/BrowserImport/LinuxBrowserSecret.ts";
-import * as AppleSpeech from "./speech/AppleSpeech.ts";
 import * as BrowserSession from "./preview/BrowserSession.ts";
 import * as DesktopBrowserHost from "./preview/DesktopBrowserHost.ts";
 import * as LoopbackTunnel from "./preview/LoopbackTunnel.ts";
@@ -157,7 +159,6 @@ const layerDesktopFoundation = Layer.mergeAll(
   DesktopPrimaryPaste.layer,
   DesktopObservability.layer,
   DesktopRendererHistory.layer,
-  AppleSpeech.layer,
 ).pipe(Layer.provideMerge(layerDesktopEnvironment));
 
 const layerDesktopSsh = layerDesktopSshEnvironment.pipe(

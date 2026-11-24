@@ -102,14 +102,10 @@ export const invocationFromClient = (
  * @internal
  */
 export const listForClient = <A>(
-  list: (invocation: McpCore.McpInvocation) => Effect.Effect<A, McpCore.RequestRejected>,
-  cursor: string | undefined
+  list: (invocation: McpCore.McpInvocation) => Effect.Effect<A, McpCore.RequestRejected>
 ): Effect.Effect<A, ProtocolError, PublicMcpSchema.McpServerClient> =>
-  Effect.andThen(
-    rejectCursor(cursor),
-    PublicMcpSchema.McpServerClient.use((request) =>
-      list(invocationFromClient(request)).pipe(Effect.mapError(ProtocolError.fromFeature))
-    )
+  PublicMcpSchema.McpServerClient.use((request) =>
+    list(invocationFromClient(request)).pipe(Effect.mapError(ProtocolError.fromFeature))
   )
 
 /**
@@ -303,19 +299,6 @@ const decodeProtocolErrorFields = Schema.decodeUnknownResult(ProtocolErrorFields
 const isReverseOperationUnsupported = (cause: unknown): cause is PublicMcpSchema.McpReverseOperationUnsupported =>
   Predicate.isTagged(cause, "McpReverseOperationUnsupported")
 
-const unknownCursor = new ProtocolError({
-  code: PublicMcpSchema.INVALID_PARAMS_ERROR_CODE,
-  message: "Unknown cursor"
-})
-
-/**
- * Rejects supplied cursors because lists return a complete page without issuing cursors.
- *
- * @internal
- */
-export const rejectCursor = (cursor: string | undefined) =>
-  cursor === undefined ? Effect.void : Effect.fail(unknownCursor)
-
 /**
  * @internal
  */
@@ -466,8 +449,6 @@ export interface HandlerInstallationContext {
     clientId: number,
     requestId: RpcMessage.RequestId
   ) => Effect.Effect<void>
-  /** Resolves once the client's transport session has ended, e.g. stdin EOF. */
-  readonly awaitClientEnd?: Effect.Effect<void> | undefined
   readonly supportedVersions: ReadonlyArray<string>
   readonly serverInfo: {
     readonly name: string

@@ -20,7 +20,6 @@ export {
   shortcutKeyFromEvent,
   type ShortcutEventLike,
   type ShortcutModifierStateLike,
-  type ShortcutKeyboardLayoutMap,
 } from "./keybindingMatching.ts";
 
 export const US_SHIFTED_TO_UNSHIFTED_KEYS: ReadonlyMap<string, string> = new Map([
@@ -168,10 +167,8 @@ export function parseKeybindingShortcut(value: string): KeybindingShortcut | nul
     trailingEmptyCount += 1;
     tokens.pop();
   }
-  if (trailingEmptyCount === 2) {
+  if (trailingEmptyCount > 0) {
     tokens.push("+");
-  } else if (trailingEmptyCount !== 0) {
-    return null;
   }
   if (tokens.some((token) => token.length === 0)) {
     return null;

@@ -1,7 +1,10 @@
 import * as NodeModule from "node:module";
 import * as NodeNet from "node:net";
 
+import { installLocalEgressGuard } from "@t3tools/shared/localEgressGuard";
 import type * as Undici from "undici";
+
+installLocalEgressGuard("server");
 
 // undici is external to the CLI bundle; Node single-executables can load it from disk only with require.
 const requireUndici = NodeModule.createRequire(import.meta.url);

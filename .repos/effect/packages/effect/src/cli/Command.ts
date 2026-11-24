@@ -223,9 +223,6 @@ export declare namespace Command {
    * `Command.Config` can contain individual flags and arguments using `Param`
    * types, nested configuration objects for organization, and arrays of
    * parameters for repeated elements.
-   * Configuration objects use own enumerable string and symbol fields;
-   * non-enumerable and inherited fields are ignored. Field keys are independent
-   * of the textual flag and argument names.
    *
    * **Example** (Configuring command input)
    *
@@ -260,7 +257,7 @@ export declare namespace Command {
    * @since 4.0.0
    */
   export interface Config {
-    readonly [key: PropertyKey]:
+    readonly [key: string]:
       | Param.Param<Param.ParamKind, any>
       | ReadonlyArray<Param.Param<Param.ParamKind, any> | Config>
       | Config
@@ -272,14 +269,13 @@ export declare namespace Command {
    * **Details**
    *
    * Only flags are allowed here; arguments are intentionally excluded.
-   * Field discovery follows the same rules as {@link Config}.
    *
    * @stability unstable
    * @category models
    * @since 4.0.0
    */
   export interface FlagConfig {
-    readonly [key: PropertyKey]:
+    readonly [key: string]:
       | Param.Param<typeof Param.flagKind, any>
       | ReadonlyArray<Param.Param<typeof Param.flagKind, any> | FlagConfig>
       | FlagConfig
@@ -564,8 +560,6 @@ export const isCommand = (u: unknown): u is Command.Any => Predicate.hasProperty
  * Use `withDescription` and related metadata combinators to add help text. The
  * overloads support simple commands, configured commands, and commands with
  * effectful handlers.
- * Configuration objects, including nested objects, use own enumerable string
- * and symbol fields. Non-enumerable and inherited fields are ignored.
  *
  * **Example** (Creating commands)
  *
@@ -680,12 +674,6 @@ export const make: {
 /**
  * Adds or replaces the handler for a command.
  *
- * **Details**
- *
- * The command keeps its existing error type, so failures from validations
- * added with `validate` stay in the result type. When this replaces a handler,
- * the previous handler's errors stay in the type as well.
- *
  * **Example** (Adding command handlers)
  *
  * ```ts import.meta.vitest
@@ -741,15 +729,15 @@ export const withHandler: {
     handler: (value: A) => Effect.Effect<void, E, R>
   ): <Name extends string, XR, XE, ContextInput>(
     self: Command<Name, A, ContextInput, XE, XR>
-  ) => Command<Name, A, ContextInput, XE | E, Exclude<R, BuiltInSettingContext>>
+  ) => Command<Name, A, ContextInput, E, Exclude<R, BuiltInSettingContext>>
   <Name extends string, A, XR, XE, R, E, ContextInput>(
     self: Command<Name, A, ContextInput, XE, XR>,
     handler: (value: A) => Effect.Effect<void, E, R>
-  ): Command<Name, A, ContextInput, XE | E, Exclude<R, BuiltInSettingContext>>
+  ): Command<Name, A, ContextInput, E, Exclude<R, BuiltInSettingContext>>
 } = dual(2, <Name extends string, A, XR, XE, R, E, ContextInput>(
   self: Command<Name, A, ContextInput, XE, XR>,
   handler: (value: A) => Effect.Effect<void, E, R>
-): Command<Name, A, ContextInput, XE | E, Exclude<R, BuiltInSettingContext>> =>
+): Command<Name, A, ContextInput, E, Exclude<R, BuiltInSettingContext>> =>
   makeCommand({ ...toImpl(self), handle: handler } as any))
 
 /**
@@ -759,28 +747,17 @@ export const withHandler: {
  *
  * Use this for rules that involve several flags or arguments, such as
  * mutually exclusive flags. The validation receives the same input as the
- * handler, with defaults, prompts and the wizard already applied. When it
- * fails, the handler does not run. Validations run in the order they were
- * added and stop at the first failure. Adding a handler later with
- * `withHandler` keeps them.
- *
- * A `CliError` failure is shown with the command help, like a parse error.
- * Fail with `CliError.ValidationError` to supply the message. Any other
- * failure is reported like a handler failure: `runWith` fails with the
- * original error and does not show help, an error with
- * `CliError.userMessage` is rendered unless `renderErrors` is `false`, and
- * the error type is added to the command's error type. Use your own tagged
- * errors when callers need to tell the failures apart, for example to map
- * them to exit codes or JSON output.
+ * handler, with defaults, prompts and the wizard already applied. A failure
+ * is shown with the command help, like a parse error, and the handler does
+ * not run. Fail with `CliError.ValidationError` to supply the message, or
+ * with any other `CliError`. Validations run in the order they were added and
+ * stop at the first failure. Adding a handler later with `withHandler` keeps
+ * them.
  *
  * A validation sees only the input that exists where it is applied. Add it
  * after `withSharedFlags` to see the shared flags. Added after
  * `withSubcommands`, it also runs when a subcommand is selected, with the
  * parent's shared flags as input.
- *
- * To tell an omitted flag from one passed with its default value, such as
- * `--force=false`, declare it with `Flag.optional` instead of
- * `Flag.withDefault` and apply the default in the handler.
  *
  * **Example** (Rejecting mutually exclusive flags)
  *
@@ -798,7 +775,6 @@ export const withHandler: {
  *   Layer.succeed(Terminal.Terminal, Terminal.make({
  *     columns: Effect.succeed(80),
  *     rows: Effect.succeed(24),
- *     size: Effect.die("unused"),
  *     readInput: Effect.die("unused"),
  *     readLine: Effect.die("unused"),
  *     display: () => Effect.void
@@ -834,81 +810,26 @@ export const withHandler: {
  * error.errors[0].message // => "--use-api and --use-docker are mutually exclusive"
  * ```
  *
- * **Example** (Failing with a domain error)
- *
- * ```ts import.meta.vitest
- * import { Effect, FileSystem, Layer, Path, Schema, Stdio, Terminal } from "effect"
- * import { CliError, Command, Flag } from "effect/cli"
- * import { ChildProcessSpawner } from "effect/process"
- * import { TestConsole } from "effect/testing"
- *
- * const CliTestLayer = Layer.mergeAll(
- *   FileSystem.layerNoop({}),
- *   Path.layer,
- *   Stdio.layerTest({}),
- *   TestConsole.layer,
- *   Layer.succeed(Terminal.Terminal, Terminal.make({
- *     columns: Effect.succeed(80),
- *     rows: Effect.succeed(24),
- *     size: Effect.die("unused"),
- *     readInput: Effect.die("unused"),
- *     readLine: Effect.die("unused"),
- *     display: () => Effect.void
- *   })),
- *   Layer.succeed(
- *     ChildProcessSpawner.ChildProcessSpawner,
- *     ChildProcessSpawner.make(() => Effect.die("unused"))
- *   )
- * )
- *
- * class ConflictingFlags extends Schema.TaggedError<ConflictingFlags>()("ConflictingFlags", {
- *   flags: Schema.Array(Schema.String)
- * }) {
- *   override get [CliError.userMessage]() {
- *     return `${this.flags.join(" and ")} cannot be used together`
- *   }
- * }
- *
- * const download = Command.make("download", {
- *   useApi: Flag.Boolean("use-api").pipe(Flag.withDefault(false)),
- *   useDocker: Flag.Boolean("use-docker").pipe(Flag.withDefault(false))
- * }, () => Effect.void).pipe(
- *   Command.validate(({ useApi, useDocker }) =>
- *     useApi && useDocker
- *       ? Effect.fail(new ConflictingFlags({ flags: ["--use-api", "--use-docker"] }))
- *       : Effect.void
- *   )
- * )
- *
- * const error = await Effect.runPromise(
- *   Command.runWith(download, { version: "1.0.0", renderErrors: false })(["--use-api", "--use-docker"]).pipe(
- *     Effect.flip,
- *     Effect.provide(CliTestLayer)
- *   )
- * )
- * error._tag // => "ConflictingFlags"
- * ```
- *
  * @stability unstable
  * @category combinators
  * @since 4.1.0
  */
 export const validate: {
-  <Input, E2 = CliError.CliError>(
-    f: (input: Input) => Effect.Effect<void, E2, Environment>
+  <Input>(
+    f: (input: Input) => Effect.Effect<void, CliError.CliError, Environment>
   ): <Name extends string, ContextInput, E, R>(
     self: Command<Name, Input, ContextInput, E, R>
-  ) => Command<Name, Input, ContextInput, E | Exclude<E2, CliError.CliError>, R>
-  <Name extends string, Input, ContextInput, E, R, E2 = CliError.CliError>(
+  ) => Command<Name, Input, ContextInput, E, R>
+  <Name extends string, Input, ContextInput, E, R>(
     self: Command<Name, Input, ContextInput, E, R>,
-    f: (input: Input) => Effect.Effect<void, E2, Environment>
-  ): Command<Name, Input, ContextInput, E | Exclude<E2, CliError.CliError>, R>
-} = dual(2, <Name extends string, Input, ContextInput, E, R, E2>(
+    f: (input: Input) => Effect.Effect<void, CliError.CliError, Environment>
+  ): Command<Name, Input, ContextInput, E, R>
+} = dual(2, <Name extends string, Input, ContextInput, E, R>(
   self: Command<Name, Input, ContextInput, E, R>,
-  f: (input: Input) => Effect.Effect<void, E2, Environment>
-): Command<Name, Input, ContextInput, E | Exclude<E2, CliError.CliError>, R> => {
+  f: (input: Input) => Effect.Effect<void, CliError.CliError, Environment>
+): Command<Name, Input, ContextInput, E, R> => {
   const impl = toImpl(self)
-  return makeCommand<Name, Input, E | E2 | CliError.CliError, R, ContextInput>({
+  return makeCommand({
     ...impl,
     parse: (raw) => Effect.tap(impl.parse(raw), f)
   }) as any
@@ -1151,8 +1072,6 @@ export const withSubcommands: {
  * Shared flags are available to this command's handler and to descendant
  * handlers via `yield* parentCommand`. Shared flags are accepted both before
  * and after a selected subcommand name (npm-style).
- * Configuration objects, including nested objects, use own enumerable string
- * and symbol fields. Non-enumerable and inherited fields are ignored.
  *
  * @stability unstable
  * @category combinators
@@ -1623,12 +1542,9 @@ export const withExamples: {
 const mapHandler = <Name extends string, Input, E, R, ContextInput, E2, R2>(
   self: Command<Name, Input, ContextInput, E, R>,
   f: (handler: Effect.Effect<void, E | CliError.CliError, R | Environment>, input: Input) => Effect.Effect<void, E2, R2>
-): Command<Name, Input, ContextInput, E | E2, R2> => {
+): Command<Name, Input, ContextInput, E2, R2> => {
   const impl = toImpl(self)
-  return makeCommand<Name, Input, E | E2, R2, ContextInput>({
-    ...impl,
-    handle: (input, path) => f(impl.handle(input, path), input)
-  })
+  return makeCommand({ ...impl, handle: (input, path) => f(impl.handle(input, path), input) })
 }
 
 /**
@@ -2139,9 +2055,9 @@ export const runWith = <const Name extends string, Input, E, R, ContextInput>(
       // 3. Parse command arguments from remaining tokens
       const parsedArgs = yield* Parser.parseArgs({ tokens: remainder, trailingOperands }, command)
       const commandPath = [command.name, ...Parser.getCommandPath(parsedArgs)] as const
-      const toShowHelpError = (error: CliError.CliError) =>
+      const toShowHelp = Effect.mapError((error: CliError.CliError) =>
         error._tag === "ShowHelp" ? error : new CliError.ShowHelp({ commandPath, errors: [error] })
-      const toShowHelp = Effect.mapError(toShowHelpError)
+      )
       const handlerCtx: GlobalFlag.HandlerContext = { builtIns, command, commandPath, version: config.version }
       const activeFlags = getGlobalFlagsForCommandPath(command, commandPath, builtIns)
 
@@ -2169,13 +2085,9 @@ export const runWith = <const Name extends string, Input, E, R, ContextInput>(
           const { colors } = yield* Prompt.Theme
           return yield* Effect.gen(function*() {
             yield* Console.log(Wizard.renderIntroduction(command.name, config.version, command.description, colors))
-            // The wizard prompts for the selected command's inputs, so drop the typed ones.
-            const selectedTokens = new Set(Parser.getSelectedCommandTokens(remainder, command))
             const prefix = [
               command.name,
-              ...tokens.filter((token) =>
-                !selectedTokens.has(token) && !(token._tag === "LongOption" && token.name === "wizard")
-              ).map(Lexer.formatToken)
+              ...args.filter((arg) => arg !== "--wizard" && !arg.startsWith("--wizard="))
             ]
             const wizardResult = yield* Wizard.run(command, { commandPath, prefix })
             yield* Console.log(Wizard.renderCompletion(wizardResult.displayArgs, colors))
@@ -2201,11 +2113,7 @@ export const runWith = <const Name extends string, Input, E, R, ContextInput>(
       if (parsedArgs.errors && parsedArgs.errors.length > 0) {
         return yield* new CliError.ShowHelp({ commandPath, errors: parsedArgs.errors })
       }
-      // Validations may fail with the command's own errors, which are reported
-      // like handler failures rather than with help.
-      const input = yield* commandImpl.parse(parsedArgs).pipe(
-        Effect.mapError((error) => CliError.isCliError(error) ? toShowHelpError(error) : error)
-      )
+      const input = yield* commandImpl.parse(parsedArgs).pipe(toShowHelp)
 
       // 7. Provide setting values
       let program = commandImpl.handle(input, [command.name])

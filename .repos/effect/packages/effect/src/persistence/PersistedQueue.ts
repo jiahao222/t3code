@@ -36,7 +36,6 @@ import * as Migrator from "../sql/Migrator.ts"
 import * as SqlClient from "../sql/SqlClient.ts"
 import type { SqlError } from "../sql/SqlError.ts"
 import type { Fragment } from "../sql/Statement.ts"
-import * as Str from "../String.ts"
 import * as Redis from "./Redis.ts"
 
 /**
@@ -84,28 +83,8 @@ export interface PersistedQueue<in out A, out R = never> {
    *
    * If an element with the same id already exists in the queue, it will not be
    * added again, and the `delay` of the duplicate offer is ignored.
-   * `deduplicate` sets how long a custom `id` stays reserved:
-   *
-   * - `"untilRemoved"` (default): until `layerCleanup` removes the completed
-   *   or failed element. The id works as an idempotency key.
-   * - `"untilExecuted"`: until the element completes or fails its final
-   *   attempt. Offers while it is pending, processing or waiting to retry are
-   *   ignored. A later offer enqueues a new element behind queued work, with its
-   *   own `delay`, so a producer that retries after completion runs the work
-   *   again.
-   *
-   * The mode is chosen per offer and is not stored with the id. An
-   * `"untilExecuted"` offer can re-open a completed or failed id even when
-   * other producers offer it with `"untilRemoved"`, so don't share an
-   * idempotency key with `"untilExecuted"` producers.
-   *
-   * With `"untilExecuted"`, handlers should read current state rather than the
-   * offered value. An offer that arrives after the handler read state but before
-   * the element completes is ignored, so check a version or dirty flag when a
-   * missed change matters.
-   *
-   * A re-offered failed id may lose its earlier failure record. See
-   * `makeStoreSql` and `makeStoreRedis` for what each store keeps.
+   * De-duplication survives completion until the id is removed by
+   * `layerCleanup`.
    *
    * `delay` postpones the first delivery. Measured by the store's clock, the
    * element is never delivered before the delay elapses, and is typically
@@ -124,7 +103,6 @@ export interface PersistedQueue<in out A, out R = never> {
   readonly offer: (value: A, options?: {
     readonly id?: string | undefined
     readonly delay?: Duration.Input | undefined
-    readonly deduplicate?: "untilExecuted" | "untilRemoved" | undefined
   }) => Effect.Effect<string, PersistedQueueError | Schema.SchemaError, R>
 
   /**
@@ -287,8 +265,7 @@ export const makeFactory = Effect.gen(function*() {
                     id,
                     element,
                     isCustomId: opts?.id !== undefined,
-                    delay,
-                    deduplicate: opts?.deduplicate
+                    delay
                   }),
                   id
                 )
@@ -465,8 +442,7 @@ const makeAckRetrySchedule = (lockExpiration: Duration.Input) =>
 
 // Internal signal used by the factory to tell a store that a taken element
 // cannot ever be processed (its stored payload fails to decode) and must be
-// dead-lettered instead of retried. Stores outside this module detect it with
-// the exported `isDeadLetterCause`.
+// dead-lettered instead of retried.
 class DeadLetter {
   readonly _tag = "~effect/persistence/PersistedQueue/DeadLetter"
   readonly cause: Cause.Cause<unknown>
@@ -510,18 +486,11 @@ const deadLetterFromCause = (cause: Cause.Cause<unknown>): DeadLetter | undefine
  * An offered `delay` is always finite and positive, and the element must not
  * be taken before it elapses. It is `undefined` for immediate elements.
  *
- * An offer whose id is already stored is ignored, unless `deduplicate` is
- * `"untilExecuted"` and that element has completed or failed its final
- * attempt. The offer is then stored as a new element after earlier offers,
- * atomically with respect to concurrent offers of the id. `undefined` means
- * `"untilRemoved"`.
- *
  * Claiming an element counts an attempt, so the `attempts` returned by `take`
  * is 1-based. When the take scope closes with a success the element is marked
  * completed; a failure retries it according to `retryDelay` or marks it failed
  * once `maxAttempts` is exhausted; an interruption releases it without
- * counting the attempt. A failure for which {@link isDeadLetterCause} holds
- * marks the element failed immediately, without a retry.
+ * counting the attempt.
  *
  * @stability unstable
  * @category services
@@ -537,7 +506,6 @@ export class PersistedQueueStore extends Context.Service<
         readonly element: unknown
         readonly isCustomId: boolean
         readonly delay?: Duration.Duration | undefined
-        readonly deduplicate?: "untilExecuted" | "untilRemoved" | undefined
       }
     ) => Effect.Effect<void, PersistedQueueError>
 
@@ -566,30 +534,6 @@ export class PersistedQueueStore extends Context.Service<
     }) => Effect.Effect<void, PersistedQueueError>
   }
 >()("effect/persistence/PersistedQueue/PersistedQueueStore") {}
-
-/**
- * Returns `true` when a take scope failed because the queue could not decode
- * the element's stored payload.
- *
- * **When to use**
- *
- * Use when a custom `PersistedQueueStore` take finalizer decides whether a
- * failed element is marked failed at once or retried.
- *
- * **Details**
- *
- * A payload that fails to decode with the queue's schema can never be
- * processed, so `PersistedQueue` fails the take scope with an internal
- * dead-letter signal and takes the next element. The store should mark the
- * element failed whatever attempts remain, which also releases its id for a
- * `deduplicate: "untilExecuted"` offer.
- *
- * @see {@link PersistedQueueStore} for the store contract that calls for this check
- * @stability unstable
- * @category predicates
- * @since 4.1.3
- */
-export const isDeadLetterCause = (cause: Cause.Cause<unknown>): boolean => deadLetterFromCause(cause) !== undefined
 
 /**
  * Provides an in-memory `PersistedQueueStore`.
@@ -646,15 +590,7 @@ export const layerStoreMemory: Layer.Layer<
         Effect.sync(() => {
           const now = clock.currentTimeMillisUnsafe()
           const queue = getOrCreateQueue(options.name)
-          const existing = queue.entries.get(options.id)
-          if (existing !== undefined) {
-            if (
-              options.deduplicate !== "untilExecuted" ||
-              (existing.state !== "completed" && existing.state !== "failed")
-            ) return
-            // delete first so the new entry is ordered after existing ones
-            queue.entries.delete(options.id)
-          }
+          if (queue.entries.has(options.id)) return
           const entry: Entry = {
             id: options.id,
             element: options.element,
@@ -702,7 +638,8 @@ export const layerStoreMemory: Layer.Layer<
                 entry.stateChangedAt = now
                 return
               }
-              if (isDeadLetterCause(exit.cause)) {
+              const deadLetter = deadLetterFromCause(exit.cause)
+              if (deadLetter !== undefined) {
                 entry.state = "failed"
                 entry.stateChangedAt = now
                 return
@@ -768,11 +705,6 @@ export const layerStoreMemory: Layer.Layer<
  * settlements are not fenced and can corrupt newer claims. Stop every old
  * worker and let its locks expire before starting upgraded workers. Keep the
  * existing Redis data rather than flushing it.
- *
- * Every failure of an id re-offered with `deduplicate: "untilExecuted"` stays
- * in the failed list until `layerCleanup` removes it, which requires
- * `failedTimeToLive`. Ids that failed on an earlier `effect` version stay
- * reserved until then, even for `"untilExecuted"` offers.
  *
  * @stability unstable
  * @category constructors
@@ -975,22 +907,21 @@ export const makeStoreRedis = Effect.fnUntraced(function*(
   })
 
   return PersistedQueueStore.of({
-    offer: ({ deduplicate, delay, element, id, isCustomId, name }) => {
+    offer: ({ delay, element, id, isCustomId, name }) => {
       const keys = keysFor(name)
       // replace lone surrogates like Redis' UTF-8 encoding does, so the id in
       // the payload matches the id keys
-      id = Str.toWellFormed(id)
+      id = id.replace(/[\uD800-\uDFFF]/gu, "\uFFFD")
       const payload = JSON.stringify({ id, element })
-      const untilExecuted = deduplicate === "untilExecuted" ? 1 : 0
       const send = Effect.suspend(() => {
         if (delay === undefined) {
           return isCustomId
-            ? offer(keys.queue, keys.ids, id, payload, untilExecuted)
+            ? offer(keys.queue, keys.ids, id, payload)
             : redis.send("RPUSH", keys.queue, payload)
         }
         const visibleAt = clock.currentTimeMillisUnsafe() + Duration.toMillis(delay)
         return isCustomId
-          ? offerDelayed(keys.delayed, keys.ids, id, payload, visibleAt, untilExecuted)
+          ? offerDelayed(keys.delayed, keys.ids, id, payload, visibleAt)
           : redis.send("ZADD", keys.delayed, visibleAt.toString(), payload)
       })
       return send.pipe(
@@ -1063,8 +994,7 @@ export const makeStoreRedis = Effect.fnUntraced(function*(
                       attempts: element.attempts,
                       lastFailure: Cause.pretty(cause),
                       failedAt: now
-                    }),
-                    now
+                    })
                   ))
                 if (dead !== undefined) {
                   return failElement(dead.cause)
@@ -1126,43 +1056,8 @@ export const makeStoreRedis = Effect.fnUntraced(function*(
   })
 })
 
-// ids sorted set scores. The sentinels sit above any completion time, so the
-// timeToLive trim skips them:
-// - inFlightIdScore: pending or processing
-// - failedIdScore + failedAt: failed at failedAt. trimFailed removes it only
-//   with the failed record carrying that failedAt
-// - +inf: legacy in-flight or failed entry. Offers treat it as in flight
-// - otherwise: the completion time
-const inFlightIdScore = 1e15
-const failedIdScore = 2e15
-
-// formatted as an integer, since Lua's default number formatting keeps only 14
-// significant digits
-const failedScoreLua = `local function failed_score(failed_at)
-  return string.format("%.0f", ${failedIdScore} + tonumber(failed_at))
-end
-`
-
-// Reserves the id and returns whether to store the offer. With until_executed,
-// a completed or failed id is reclaimed.
-const claimIdLua = `local function claim_id(key_ids, id, until_executed)
-  if redis.call("ZADD", key_ids, "NX", ${inFlightIdScore}, id) == 1 then
-    return true
-  end
-  if until_executed ~= "1" then
-    return false
-  end
-  local score = redis.call("ZSCORE", key_ids, id)
-  if score == "inf" or tonumber(score) == ${inFlightIdScore} then
-    return false
-  end
-  redis.call("ZADD", key_ids, "XX", ${inFlightIdScore}, id)
-  return true
-end
-`
-
 const offerRedis = Redis.script(
-  (...args: [keyQueue: string, keyIds: string, id: string, payload: string, untilExecuted: number]) => args,
+  (...args: [keyQueue: string, keyIds: string, id: string, payload: string]) => args,
   {
     lua: `
 local key_queue = KEYS[1]
@@ -1170,8 +1065,10 @@ local key_ids = KEYS[2]
 local id = ARGV[1]
 local payload = ARGV[2]
 
-${claimIdLua}
-if claim_id(key_ids, id, ARGV[3]) then
+-- park the dedupe entry outside the timeToLive trim range until the element
+-- completes, so unprocessed elements never lose dedupe protection
+local result = redis.call("ZADD", key_ids, "NX", "+inf", id)
+if result == 1 then
   redis.call("RPUSH", key_queue, payload)
 end
 `,
@@ -1180,16 +1077,7 @@ end
 )
 
 const offerDelayedRedis = Redis.script(
-  (
-    ...args: [
-      keyDelayed: string,
-      keyIds: string,
-      id: string,
-      payload: string,
-      visibleAt: number,
-      untilExecuted: number
-    ]
-  ) => args,
+  (...args: [keyDelayed: string, keyIds: string, id: string, payload: string, visibleAt: number]) => args,
   {
     lua: `
 local key_delayed = KEYS[1]
@@ -1198,8 +1086,8 @@ local id = ARGV[1]
 local payload = ARGV[2]
 local visible_at = ARGV[3]
 
-${claimIdLua}
-if claim_id(key_ids, id, ARGV[4]) then
+local result = redis.call("ZADD", key_ids, "NX", "+inf", id)
+if result == 1 then
   redis.call("ZADD", key_delayed, visible_at, payload)
 end
 `,
@@ -1231,7 +1119,6 @@ local key_owners = KEYS[6]
 local max_attempts = tonumber(ARGV[1])
 local now = ARGV[2]
 
-${failedScoreLua}
 local entries = redis.call("HGETALL", key_pending)
 -- recovery revokes ownership, so late settlements from the old claim are no-ops
 for i = 1, #entries, 2 do
@@ -1249,7 +1136,7 @@ for i = 1, #entries, 2 do
       redis.call("HDEL", key_attempts, id)
       -- failed ids keep their dedupe entry until failedTimeToLive removes the
       -- dead-letter record, so park them outside the timeToLive trim range
-      redis.call("ZADD", key_ids, "XX", failed_score(now), id)
+      redis.call("ZADD", key_ids, "XX", "+inf", id)
     else
       redis.call("RPUSH", key_queue, payload)
     end
@@ -1375,8 +1262,7 @@ const failedRedis = Redis.script(
       keyIds: string,
       keyOwners: string,
       id: string,
-      payload: string,
-      failedAt: number
+      payload: string
     ]
   ) => args,
   {
@@ -1389,15 +1275,13 @@ local key_ids = KEYS[5]
 local key_owners = KEYS[6]
 local id = ARGV[1]
 local payload = ARGV[2]
-local failed_at = ARGV[3]
 
-${failedScoreLua}
 ${releaseClaimLua}
 redis.call("HDEL", key_attempts, id)
 redis.call("RPUSH", key_failed, payload)
 -- failed ids keep their dedupe entry until failedTimeToLive removes the
 -- dead-letter record, so park them outside the timeToLive trim range
-redis.call("ZADD", key_ids, "XX", failed_score(failed_at), id)
+redis.call("ZADD", key_ids, "XX", "+inf", id)
 `,
     numberOfKeys: 6
   }
@@ -1538,11 +1422,7 @@ while removed < ${trimFailedBatchSize} do
     -- failedAt is always the last field of a failed record
     local failed_at = tonumber(string.match(head, ',"failedAt":([^,}]+)%}$'))
     if failed_at ~= nil and failed_at >= cutoff then break end
-    -- release the id only if it still belongs to this failure
-    local score = redis.call("ZSCORE", key_ids, id)
-    if score == "inf" or (failed_at ~= nil and tonumber(score) == ${failedIdScore} + failed_at) then
-      redis.call("ZREM", key_ids, id)
-    end
+    redis.call("ZREM", key_ids, id)
   end
   -- a corrupt head would otherwise block trimming of the whole list
   redis.call("LPOP", key_failed)
@@ -1591,17 +1471,6 @@ export const layerStoreRedis: (
  * Offer and retry delays are measured with the database clock and rounded up
  * to whole seconds.
  *
- * An id re-offered with `deduplicate: "untilExecuted"` keeps only its latest
- * failure.
- *
- * **Gotchas**
- *
- * An `"untilExecuted"` offer inside a transaction checks the id against that
- * transaction's snapshot. Under an isolation level with one snapshot per
- * transaction, such as MySQL's default repeatable read, an element that
- * completed or failed after the first read still looks in flight, so the offer
- * is ignored.
- *
  * @stability unstable
  * @category constructors
  * @since 4.0.0
@@ -1637,7 +1506,7 @@ export const makeStoreSql: (
 
   yield* Effect.orDie(
     Migrator.make({})({
-      loader: sqlMigrations(tableName, sql),
+      loader: sqlMigrations(tableName),
       table: `${tableName}_migrations`
     })
   )
@@ -1663,21 +1532,17 @@ export const makeStoreSql: (
     })
   }
   const secondsAgo = (seconds: number) => secondsOffset(-Math.max(Math.ceil(seconds), 0))
-  // sqlite's CURRENT_TIMESTAMP drops the fraction of the current second, so
-  // visible_at deadlines and the readiness check share this fractional clock
-  const sqliteOffset = (seconds: number) =>
-    sql`strftime('%Y-%m-%d %H:%M:%f', 'now', '${sql.literal(seconds.toString())} seconds')`
-  // Deadline for a delayed offer or retry, which must never land before the
-  // delay elapses. pg reads clock_timestamp() since NOW() is fixed at
-  // transaction start. mysql stores whole seconds and NOW() drops the current
-  // fraction, so it gets an extra second to cover it.
-  const visibleAfter = (delay: Duration.Duration) => {
-    const seconds = Math.max(Math.ceil(Duration.toSeconds(delay)), 0)
+  const secondsFromNow = (seconds: number) => secondsOffset(Math.max(Math.ceil(seconds), 0))
+  // Deadline for a delayed offer, which must never land before the delay
+  // elapses. pg reads clock_timestamp() since NOW() is fixed at transaction
+  // start. mysql and sqlite clocks drop the fraction of the current second, so
+  // they get a whole extra second to cover it.
+  const delayedVisibleAt = (delay: Duration.Duration) => {
+    const seconds = Math.ceil(Duration.toSeconds(delay))
     return sql.onDialectOrElse({
       pg: () => sql`clock_timestamp() + INTERVAL '${sql.literal(seconds.toString())} seconds'`,
-      mysql: () => secondsOffset(seconds + 1),
       mssql: () => secondsOffset(seconds),
-      orElse: () => sqliteOffset(seconds)
+      orElse: () => secondsOffset(seconds + 1)
     })
   }
   const expiresAt = secondsAgo(Duration.toSeconds(lockExpiration))
@@ -1803,8 +1668,9 @@ export const makeStoreSql: (
     ack(
       sql`
         UPDATE ${tableNameSql}
-        SET acquired_at = NULL, acquired_by = NULL, updated_at = ${sqlNow}, visible_at = ${visibleAfter(delay)},
-          last_failure = ${Cause.pretty(cause)}
+        SET acquired_at = NULL, acquired_by = NULL, updated_at = ${sqlNow}, visible_at = ${
+        secondsFromNow(Duration.toSeconds(delay))
+      }, last_failure = ${Cause.pretty(cause)}
         WHERE sequence = ${element.sequence}
         AND acquired_by = ${stringLiteral(element.lock)}
       `,
@@ -1956,7 +1822,7 @@ export const makeStoreSql: (
               WHERE queue_name = ${name}
               AND state = 'pending'
               AND attempts < ${maxAttempts}
-              AND visible_at <= ${sqliteOffset(0)}
+              AND visible_at <= ${sqlNow}
               AND (acquired_at IS NULL OR acquired_at < ${expiresAt})
               ORDER BY visible_at ASC, sequence ASC
               LIMIT ${sql.literal(size.toString())}
@@ -2054,42 +1920,17 @@ export const makeStoreSql: (
       })
     )
 
-  // Stores the re-offer as a new row with a fresh sequence. The plain read keeps
-  // new ids lock-free, since under MySQL's repeatable read deleting an absent
-  // key takes gap locks that deadlock concurrent inserts. The delete re-checks
-  // the state and shares a transaction with the insert, so concurrent offers of
-  // the id wait on the deleted row and then see the re-offer.
-  const replaceExecuted = <A, E, R>(id: string, name: string, insert: Effect.Effect<A, E, R>) =>
-    Effect.flatMap(
-      sql<{ readonly sequence: number | string }>`
-        SELECT sequence FROM ${tableNameSql}
-        WHERE id = ${id} AND queue_name = ${name} AND state IN ('completed', 'failed')
-      `,
-      (rows) =>
-        rows.length === 0 ? insert : sql.withTransaction(Effect.andThen(
-          sql`
-            DELETE FROM ${tableNameSql}
-            WHERE sequence = ${rows[0].sequence} AND state IN ('completed', 'failed')
-          `,
-          insert
-        ))
-    )
-
   return PersistedQueueStore.of({
-    offer: ({ deduplicate, delay, element, id, isCustomId, name }) =>
+    offer: ({ delay, element, id, name }) =>
       Effect.catchCause(
-        Effect.suspend(() => {
-          const insert = offer(
+        Effect.suspend(() =>
+          offer(
             id,
             name,
             JSON.stringify(element),
-            delay === undefined ? sqlNow : visibleAfter(delay)
+            delay === undefined ? sqlNow : delayedVisibleAt(delay)
           )
-          // generated ids are never offered twice
-          return deduplicate === "untilExecuted" && isCustomId
-            ? replaceExecuted(id, name, insert)
-            : insert
-        }),
+        ),
         (cause) =>
           Effect.fail(
             new PersistedQueueError({
@@ -2193,7 +2034,7 @@ export const makeStoreSql: (
   })
 })
 
-const sqlMigrations = (tableName: string, client: SqlClient.SqlClient) =>
+const sqlMigrations = (tableName: string) =>
   Migrator.fromRecord({
     "0001_create_table": Effect.gen(function*() {
       const sql = (yield* SqlClient.SqlClient).withoutTransforms()
@@ -2418,22 +2259,6 @@ const sqlMigrations = (tableName: string, client: SqlClient.SqlClient) =>
           sql`CREATE INDEX ${takeIndex} ON ${tableNameSql} (queue_name, visible_at)
             WHERE state = 'pending'`
       })
-    }),
-    ...client.onDialectOrElse({
-      pg: () => ({
-        // Migration 0002 widened the column but not its SERIAL sequence.
-        "0003_widen_sequence": Effect.gen(function*() {
-          const [relation] = client`${client(tableName)}`.compile()
-          const [row] = yield* client<{ readonly sequence: string | null }>`
-            SELECT pg_get_serial_sequence(${relation}, 'sequence') AS sequence
-          `
-          if (row.sequence !== null) {
-            // PostgreSQL already quotes and qualifies the sequence name.
-            yield* client`ALTER SEQUENCE ${client.literal(row.sequence)} AS bigint`
-          }
-        })
-      }),
-      orElse: () => ({})
     })
   })
 

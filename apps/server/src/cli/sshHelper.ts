@@ -63,24 +63,22 @@ const pickPort = Command.make("pick-port", {
 );
 
 const probe = (port: number, probeTimeoutMs: number) =>
-  new Promise<"ready" | "refused" | "not-ready">((resolve) => {
+  new Promise<boolean>((resolve) => {
     const request = NodeHttp.get(
       { hostname: "127.0.0.1", port, path: "/", timeout: probeTimeoutMs },
       (response) => {
         response.resume();
         response.once("end", () => {
           const status = response.statusCode ?? 0;
-          resolve(status >= 200 && status < 300 ? "ready" : "not-ready");
+          resolve(status >= 200 && status < 300);
         });
       },
     );
     request.once("timeout", () => {
       request.destroy();
-      resolve("not-ready");
+      resolve(false);
     });
-    request.once("error", (error: NodeJS.ErrnoException) =>
-      resolve(error.code === "ECONNREFUSED" ? "refused" : "not-ready"),
-    );
+    request.once("error", () => resolve(false));
   });
 
 const waitReady = Command.make("wait-ready", {
@@ -91,15 +89,11 @@ const waitReady = Command.make("wait-ready", {
   Command.withHandler(({ port, timeoutMs, probeTimeoutMs }) =>
     Effect.promise(async () => {
       const deadline = Date.now() + timeoutMs;
-      let refusedOnly = true;
       while (Date.now() < deadline) {
-        const result = await probe(port, probeTimeoutMs);
-        if (result === "ready") return;
-        refusedOnly &&= result === "refused";
+        if (await probe(port, probeTimeoutMs)) return;
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      // The launcher reads 2 as "nothing listens on this port".
-      process.exitCode = refusedOnly ? 2 : 1;
+      process.exitCode = 1;
     }),
   ),
 );

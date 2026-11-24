@@ -77,8 +77,7 @@ import * as Option_ from "./Option.ts"
 import * as Order from "./Order.ts"
 import * as Pipeable from "./Pipeable.ts"
 import * as Predicate from "./Predicate.ts"
-import * as Rational_ from "./Rational.ts"
-import type * as Record_ from "./Record.ts"
+import * as Record_ from "./Record.ts"
 import * as Redacted_ from "./Redacted.ts"
 import * as RegExp_ from "./RegExp.ts"
 import * as Result_ from "./Result.ts"
@@ -2835,8 +2834,8 @@ function templateLiteralParts(parts: TemplateLiteral.Parts) {
   return parts.map((part) => isSchema(part) ? part.ast : new SchemaAST.Literal(part as TemplateLiteral.LiteralPart))
 }
 /**
- * Creates a schema that validates strings against a fixed-length tuple of
- * template literal parts.
+ * Creates a schema that validates strings by matching ordered template literal
+ * parts.
  *
  * **When to use**
  *
@@ -2850,9 +2849,6 @@ function templateLiteralParts(parts: TemplateLiteral.Parts) {
  * and bigint schema parts are applied while matching each segment.
  *
  * **Gotchas**
- *
- * Use an inline tuple or `as const` for `parts`. Widened arrays and open-ended
- * tuples are unsupported despite being accepted by the signature.
  *
  * Parts must not contain encodings, including inside unions or nested templates.
  * Construction throws for transformed parts even when their decoded and encoded
@@ -2923,8 +2919,7 @@ export interface TemplateLiteralParser<Parts extends TemplateLiteral.Parts> exte
   readonly parts: Parts
 }
 /**
- * Parses strings into typed tuples using a fixed-length tuple of template
- * literal parts.
+ * Schema for parsing matched template literal strings into typed tuple parts.
  *
  * **When to use**
  *
@@ -2940,9 +2935,6 @@ export interface TemplateLiteralParser<Parts extends TemplateLiteral.Parts> exte
  * their transformations, checks, and decoding and encoding service requirements.
  *
  * **Gotchas**
- *
- * Use an inline tuple or `as const` for `parts`. Widened arrays and open-ended
- * tuples are unsupported despite being accepted by the signature.
  *
  * Ambiguous templates use greedy segmentation with backtracking. Encoding a
  * tuple and decoding the resulting string can therefore produce a different
@@ -3574,14 +3566,11 @@ function makeStruct<const Fields extends Struct.Fields>(ast: SchemaAST.Objects, 
  *
  * Each field value is a schema. Use {@link optionalKey} or {@link optional} to
  * mark fields as optional, and {@link mutableKey} to mark them as mutable.
- * Field definitions are discovered from own enumerable string and symbol
- * properties of `fields`. Non-enumerable and inherited definitions are ignored.
  *
  * The resulting schema's `Type` is a readonly object type with the fields'
  * decoded types. The `Encoded` form mirrors the field schemas' encoded types.
- * Declared fields on the input may be non-enumerable or inherited and are copied
- * to own properties in the output. The `__proto__` field is accepted only when
- * it is an own property.
+ * Declared fields may be inherited and are copied to own properties in the
+ * output. The `__proto__` field is accepted only when it is an own property.
  * Parsing does not guarantee that output keys retain their input order.
  *
  * **Example** (Defining a basic struct)
@@ -3683,10 +3672,6 @@ const canonicalPropertyKey = (key: PropertyKey): string | symbol =>
  * the renamed keys. Keys not present in the mapping are left unchanged.
  * If two existing fields would produce the same encoded key, construction
  * fails.
- * Only own enumerable string and symbol properties of the schema's `fields`
- * define fields to rename. Non-enumerable and inherited field definitions are
- * ignored. For each selected field, an own entry in `mapping` is used even if
- * that entry is non-enumerable; inherited mapping entries are ignored.
  *
  * **Example** (Renaming `name` to `full_name` in the encoded form)
  *
@@ -3713,7 +3698,7 @@ export function encodeKeys<
     const appliedMapping: any = Object.create(null)
     const reverseMapping: any = Object.create(null)
     const seenEncodedKeys = new Set<string | symbol>()
-    for (const k of InternalRecord.ownEnumerableKeys(self.fields)) {
+    for (const k of Reflect.ownKeys(self.fields)) {
       const encoded = toEncoded(self.fields[k])
       const hasMapping = Object.hasOwn(mapping, k)
       const encodedKey = hasMapping ? (mapping as any)[k] as PropertyKey : k
@@ -3746,10 +3731,6 @@ export function encodeKeys<
  * returns `Option`. On encoding the derived fields are stripped. This allows
  * computed or enriched fields to live in the decoded type without appearing in
  * the encoded form.
- * Existing and added field definitions use own enumerable string and symbol
- * properties; non-enumerable and inherited definitions are ignored. Derivation
- * functions are looked up by the selected field names and may be non-enumerable
- * or inherited.
  *
  * **Example** (Adding a computed `fullName` field)
  *
@@ -3779,15 +3760,14 @@ export function extendTo<S extends Struct<Struct.Fields>, const Fields extends S
   return (
     self: S
   ): decodeTo<Struct<Simplify<{ [K in keyof S["fields"]]: toType<S["fields"][K]> } & Fields>>, S> => {
-    const f = Struct_.map(self.fields, toType)
+    const f = Record_.map(self.fields, toType)
     const to = Struct({ ...f, ...fields })
-    const keys = InternalRecord.ownEnumerableKeys(fields)
     return self.pipe(decodeTo(
       to,
       SchemaTransformation.transform({
         decode: (input) => {
           const out: any = { ...input }
-          for (const k of keys) {
+          for (const k in fields) {
             const f = derive[k]
             const o = f(input)
             if (Option_.isSome(o)) {
@@ -3798,7 +3778,7 @@ export function extendTo<S extends Struct<Struct.Fields>, const Fields extends S
         },
         encode: (input) => {
           const out = { ...input }
-          for (const k of keys) {
+          for (const k in fields) {
             delete out[k]
           }
           return out
@@ -4233,13 +4213,10 @@ export interface StructWithRest<
   readonly records: Records
 }
 /**
- * Extends a struct schema with a fixed-length tuple of record schemas, producing
- * a schema whose decoded type intersects the struct and all records.
+ * Extends a struct schema with one or more record (index-signature) schemas,
+ * producing a schema whose decoded type intersects the struct and all records.
  *
  * **Gotchas**
- *
- * Keep `records` as a tuple using an inline literal or `as const`. Widened arrays
- * and open-ended tuples are unsupported and can lose inferred index signatures.
  *
  * The base schema must have an object-shaped encoded type. Whole-object
  * transformations are not supported, even with an empty rest array. Apply
@@ -4423,8 +4400,7 @@ export interface Tuple<Elements extends Tuple.Elements> extends
   readonly "Iso": Tuple.Iso<Elements>
   readonly elements: Elements
   /**
-   * Returns a new tuple with the elements modified by the provided function,
-   * which must return a fixed-length tuple.
+   * Returns a new tuple with the elements modified by the provided function.
    *
    * **Details**
    *
@@ -4463,12 +4439,7 @@ function makeTuple<Elements extends Tuple.Elements>(ast: SchemaAST.Arrays, eleme
   })
 }
 /**
- * Defines a tuple schema from a fixed-length tuple of element schemas.
- *
- * **Gotchas**
- *
- * Use an inline tuple or `as const`. Widened arrays and open-ended tuples are
- * unsupported despite being accepted by the signature.
+ * Defines a fixed-length tuple schema from an array of element schemas.
  *
  * **Example** (Defining a pair of string and number)
  *
@@ -4642,8 +4613,6 @@ export interface TupleWithRest<
  * Extends a fixed-length tuple schema with a variadic rest segment.
  *
  * **Details**
- *
- * The `rest` argument must be a non-empty fixed-length tuple of schemas.
  *
  * The resulting tuple starts with the fixed elements from `schema`. The first
  * schema in `rest` is the repeatable element schema, and any additional schemas
@@ -4953,8 +4922,7 @@ export interface Union<Members extends ReadonlyArray<Constraint>> extends
   readonly "Iso": { [K in keyof Members]: Members[K]["Iso"] }[number]
   readonly members: Members
   /**
-   * Returns a new union with the members modified by the provided function,
-   * which must return a fixed-length tuple.
+   * Returns a new union with the members modified by the provided function.
    *
    * **Details**
    *
@@ -4999,20 +4967,14 @@ function makeUnion<Members extends ReadonlyArray<Constraint>>(
   })
 }
 /**
- * Creates a union schema from a fixed-length tuple of member schemas. Members
- * are tested in order; the first match is returned.
+ * Creates a union schema from an array of member schemas. Members are tested in
+ * order; the first match is returned.
  *
  * **Details**
  *
  * Optionally, specify `mode`:
  * - `"anyOf"` (default) — matches if any member matches.
  * - `"oneOf"` — matches if exactly one member matches.
- *
- * **Gotchas**
- *
- * Use an inline tuple or `as const`. Widened arrays, such as `Object.values(...)`
- * or `.map(...)` results, and open-ended tuples are unsupported despite being
- * accepted by the signature.
  *
  * **Example** (Defining a string or number union)
  *
@@ -5048,32 +5010,18 @@ export interface Literals<L extends ReadonlyArray<SchemaAST.LiteralValue>>
   readonly literals: L
   readonly members: { readonly [K in keyof L]: Literal<L[K]> }
   /**
-   * Returns a new union with the members modified by the provided function,
-   * which must return a fixed-length tuple.
+   * Map over the members of the union.
    */
   mapMembers<To extends ReadonlyArray<Constraint>>(f: (members: this["members"]) => To): Union<Simplify<Readonly<To>>>
 
   pick<const L2 extends ReadonlyArray<L[number]>>(literals: L2): Literals<L2>
 
-  /**
-   * Transforms each literal to the target literal at the same index.
-   *
-   * **Gotchas**
-   *
-   * Source and target literals must be fixed-length tuples of equal length.
-   * Widened arrays lose the length check and positional typing.
-   */
   transform<const L2 extends { readonly [I in keyof L]: SchemaAST.LiteralValue }>(
     to: L2
   ): Union<{ [I in keyof L]: decodeTo<Literal<L2[I]>, Literal<L[I]>> }>
 }
 /**
- * Creates a union schema from a fixed-length tuple of literal values.
- *
- * **Gotchas**
- *
- * Use an inline tuple or `as const` to preserve positions for `mapMembers` and
- * `transform`. Widened arrays and open-ended tuples are unsupported.
+ * Creates a union schema from an array of literal values.
  *
  * **Example** (Defining status codes)
  *
@@ -5339,7 +5287,7 @@ export interface brand<S extends Constraint, B extends string> extends
   readonly "EncodingServices": S["EncodingServices"]
   readonly "~type.make.in": S["~type.make.in"]
   readonly "~type.make": S["Type"] & Brand.Brand<B>
-  readonly "Iso": S["Iso"] & Brand.Brand<B>
+  readonly "Iso": S["Type"] & Brand.Brand<B>
   readonly schema: S
   readonly identifier: string
 }
@@ -6434,7 +6382,7 @@ type TaggedUnionUtils<
    */
   readonly discriminants: { readonly [I in keyof Flattened]: Flattened[I]["Type"][Tag] }
   readonly cases: Simplify<{ [M in Flattened[number] as M["Type"][Tag]]: M }>
-  readonly isAnyOf: <const Keys extends Members[number]["Type"][Tag]>(
+  readonly isAnyOf: <const Keys>(
     keys: ReadonlyArray<Keys>
   ) => (value: Members[number]["Type"]) => value is Extract<Members[number]["Type"], { readonly [K in Tag]: Keys }>
   readonly guards: { [M in Flattened[number] as M["Type"][Tag]]: (u: unknown) => u is M["Type"] }
@@ -6460,17 +6408,14 @@ export type toTaggedUnion<
   Members extends ReadonlyArray<Constraint & { readonly Type: { readonly [K in Tag]: PropertyKey } }>
 > = Union<Members> & TaggedUnionUtils<Tag, Members>
 /**
- * Augments a {@link Union} of tagged structs or nested unions with utility methods
- * and an ordered tuple of discriminant values.
+ * Augments an existing {@link Union} of tagged structs with utility methods and an ordered tuple of discriminant
+ * values.
  *
  * **Gotchas**
  *
- * - Requires fixed-length member tuples, including in nested unions. Widened arrays
- *   and open-ended tuples compile but are unsupported and can lose members from
- *   `discriminants`, `cases`, `guards` and match handler types.
- * - Throws when multiple members use the same discriminant property key,
- *   including members of nested unions. Numeric and string values such as `1`
- *   and `"1"` count as duplicates.
+ * Throws when multiple members use the same discriminant property key,
+ * including members of nested unions. Numeric and string values such as `1`
+ * and `"1"` count as duplicates.
  *
  * **Example** (Adding tagged-union utilities to an existing union)
  *
@@ -6592,10 +6537,10 @@ export interface TaggedUnion<Cases extends Record<string, Constraint>> extends
   readonly "EncodingServices": { [K in keyof Cases]: Cases[K]["EncodingServices"] }[keyof Cases]
   readonly "~type.make.in": { [K in keyof Cases]: Cases[K]["~type.make"] }[keyof Cases]
   readonly "~type.make": { [K in keyof Cases]: Cases[K]["~type.make"] }[keyof Cases]
-  readonly "Iso": { [K in keyof Cases]: Cases[K]["Iso"] }[keyof Cases]
+  readonly "Iso": { [K in keyof Cases]: Cases[K]["Type"] }[keyof Cases]
   readonly tag: "_tag"
   readonly cases: Cases
-  readonly isAnyOf: <const Keys extends keyof Cases>(
+  readonly isAnyOf: <const Keys>(
     keys: ReadonlyArray<Keys>
   ) => (value: Cases[keyof Cases]["Type"]) => value is Extract<Cases[keyof Cases]["Type"], { _tag: Keys }>
   readonly guards: { [K in keyof Cases]: (u: unknown) => u is Cases[K]["Type"] }
@@ -8984,7 +8929,8 @@ export function isBetweenSize(minimum: number, maximum: number, annotations?: An
 }
 /**
  * Validates that an object contains at least the specified number of
- * own enumerable properties, including both string and symbol keys.
+ * properties. This includes both string and symbol keys when counting
+ * properties.
  *
  * **Details**
  *
@@ -9008,7 +8954,7 @@ export function isBetweenSize(minimum: number, maximum: number, annotations?: An
 export function isMinProperties(minProperties: number, annotations?: Annotations.Filter) {
   minProperties = normalizeCardinality(minProperties)
   return makeFilter<object>(
-    (input) => InternalRecord.ownEnumerableKeys(input).length >= minProperties,
+    (input) => Reflect.ownKeys(input).length >= minProperties,
     {
       expected: `a value with at least ${minProperties === 1 ? "1 entry" : `${minProperties} entries`}`,
       representation: {
@@ -9026,8 +8972,8 @@ export function isMinProperties(minProperties: number, annotations?: Annotations
   )
 }
 /**
- * Validates that an object contains at most the specified number of own
- * enumerable properties, including both string and symbol keys.
+ * Validates that an object contains at most the specified number of properties.
+ * This includes both string and symbol keys when counting properties.
  *
  * **Details**
  *
@@ -9051,7 +8997,7 @@ export function isMinProperties(minProperties: number, annotations?: Annotations
 export function isMaxProperties(maxProperties: number, annotations?: Annotations.Filter) {
   maxProperties = normalizeCardinality(maxProperties)
   return makeFilter<object>(
-    (input) => InternalRecord.ownEnumerableKeys(input).length <= maxProperties,
+    (input) => Reflect.ownKeys(input).length <= maxProperties,
     {
       expected: `a value with at most ${maxProperties === 1 ? "1 entry" : `${maxProperties} entries`}`,
       representation: {
@@ -9069,8 +9015,8 @@ export function isMaxProperties(maxProperties: number, annotations?: Annotations
   )
 }
 /**
- * Validates that an object contains between `minimum` and `maximum` own
- * enumerable properties (inclusive), including both string and symbol keys.
+ * Validates that an object contains between `minimum` and `maximum` properties (inclusive).
+ * This includes both string and symbol keys when counting properties.
  *
  * **Details**
  *
@@ -9095,10 +9041,7 @@ export function isBetweenProperties(minimum: number, maximum: number, annotation
   minimum = normalizeCardinality(minimum)
   maximum = normalizeCardinality(maximum)
   return makeFilter<object>(
-    (input) => {
-      const size = InternalRecord.ownEnumerableKeys(input).length
-      return size >= minimum && size <= maximum
-    },
+    (input) => Reflect.ownKeys(input).length >= minimum && Reflect.ownKeys(input).length <= maximum,
     {
       expected: minimum === maximum
         ? `a value with exactly ${minimum === 1 ? "1 entry" : `${minimum} entries`}`
@@ -9123,13 +9066,13 @@ export function isBetweenProperties(minimum: number, maximum: number, annotation
   )
 }
 /**
- * Validates that every own enumerable property key of an object satisfies the encoded side
+ * Validates that every own property key of an object satisfies the encoded side
  * of the provided key schema.
  *
  * **Details**
  *
- * Checks both string and symbol keys. Non-enumerable and inherited properties
- * are ignored.
+ * This check uses `Reflect.ownKeys`, so symbol keys are validated in addition to
+ * string property names.
  *
  * JSON Schema:
  * This check corresponds to `propertyNames` in JSON Schema. Effect checks the
@@ -9146,7 +9089,7 @@ export function isPropertyNames(keySchema: Constraint, annotations?: Annotations
   const parser = SchemaParser._issue(propertyNames.ast)
   return makeFilter<object>(
     (input, ast, options) => {
-      const keys = InternalRecord.ownEnumerableKeys(input)
+      const keys = Reflect.ownKeys(input)
       const issues: Array<SchemaIssue.Issue> = []
       for (const key of keys) {
         const issue = parser(key, options)
@@ -10336,7 +10279,7 @@ export interface NumberFromString extends decodeTo<Number, String> {
  * numbers.
  *
  * Encoding:
- * A number is encoded as a `string`, preserving negative zero as `"-0"`.
+ * A number is encoded as a `string`.
  *
  * @stability stable
  * @category schemas
@@ -10365,7 +10308,7 @@ export interface FiniteFromString extends decodeTo<Finite, String> {
  *   `-Infinity` values.
  *
  * Encoding:
- * - A finite number is encoded as a `string`, preserving negative zero as `"-0"`.
+ * - A finite number is encoded as a `string`.
  *
  * @stability stable
  * @category schemas
@@ -10482,7 +10425,6 @@ export interface StringFromBase64 extends decodeTo<String, String> {
  *
  * Encoding:
  * - A `string` is encoded as a base64-encoded string.
- * - Encoding fails if the string contains an unpaired UTF-16 surrogate.
  *
  * @stability stable
  * @category schemas
@@ -10513,7 +10455,6 @@ export interface StringFromBase64Url extends decodeTo<String, String> {
  *
  * Encoding:
  * - A `string` is encoded as a base64 (URL) encoded string.
- * - Encoding fails if the string contains an unpaired UTF-16 surrogate.
  *
  * @stability stable
  * @category schemas
@@ -10544,7 +10485,6 @@ export interface StringFromHex extends decodeTo<String, String> {
  *
  * Encoding:
  * - A `string` is encoded as a hex string.
- * - Encoding fails if the string contains an unpaired UTF-16 surrogate.
  *
  * @stability stable
  * @category schemas
@@ -10576,7 +10516,6 @@ export interface StringFromUriComponent extends decodeTo<String, String> {
  *
  * Encoding:
  * - A `string` is encoded as a URI component encoded string.
- * - Encoding fails if the string contains an unpaired UTF-16 surrogate.
  *
  * **Example** (Decoding URI component strings)
  *
@@ -11026,117 +10965,6 @@ export const BigDecimalFromString: BigDecimalFromString = BigDecimalString.pipe(
 )
 
 // -----------------------------------------------------------------------------
-// Rational schemas
-// -----------------------------------------------------------------------------
-
-const rationalFromString: SchemaTransformation.Transformation<Rational_.Rational, string> = SchemaTransformation
-  .transformEffect<Rational_.Rational, string>({
-    decode: (s, options) => {
-      const result = Rational_.fromString(s)
-      return Option_.isNone(result)
-        ? Effect.fail(
-          new SchemaIssue.InvalidValue(
-            { expected: "a valid Rational string" },
-            s,
-            options
-          )
-        )
-        : Effect.succeed(result.value)
-    },
-    encode: (rational) => Effect.succeed(Rational_.format(rational))
-  })
-
-/**
- * Type-level representation of {@link Rational}.
- *
- * @stability unstable
- * @category models
- * @since 4.1.3
- */
-export interface Rational extends declare<Rational_.Rational> {
-  readonly "Rebuild": Rational
-}
-
-const RationalString = String.annotate({ expected: "a string that will be decoded as a Rational" })
-
-/**
- * Schema for `Rational` values.
- *
- * **Details**
- *
- * The JSON codec encodes a rational as its canonical `numerator/denominator`
- * string.
- *
- * @see {@link RationalFromString} for parsing fraction strings into a Rational
- *
- * @stability unstable
- * @category schemas
- * @since 4.1.3
- */
-export const Rational: Rational = declare(
-  Rational_.isRational,
-  {
-    representation: {
-      id: "effect/schema/Rational",
-      payload: null
-    },
-    toCode: () => ({
-      runtime: `Schema.Rational`,
-      Type: `Rational.Rational`,
-      importDeclarations: [`import * as Rational from "effect/Rational"`]
-    }),
-    expected: "Rational",
-    toCodecArbitrary: () =>
-      linkDecoding<Rational_.Rational>()(
-        Struct({
-          numerator: BigInt,
-          denominator: BigInt.check(isGreaterThanOrEqualToBigInt(globalThis.BigInt(1)))
-        }),
-        SchemaGetter.transform(({ denominator, numerator }) => Rational_.makeUnsafe(numerator, denominator))
-      ),
-    toCodecJson: () =>
-      link<Rational_.Rational>()(
-        RationalString,
-        rationalFromString
-      ),
-    toFormatter: () => Rational_.format
-  }
-)
-
-/**
- * Type-level representation of {@link RationalFromString}.
- *
- * @stability unstable
- * @category models
- * @since 4.1.3
- */
-export interface RationalFromString extends decodeTo<Rational, String> {
-  readonly "Rebuild": RationalFromString
-}
-
-/**
- * Schema that parses a fraction string into a `Rational`.
- *
- * **Details**
- *
- * Decoding accepts `[+-]digits` or `[+-]digits/[+-]digits` via
- * `Rational.fromString`; reducible fractions and negative denominators are
- * normalized, and a zero denominator is rejected. Encoding uses
- * `Rational.format`, so the output is always a reduced `numerator/denominator`
- * string.
- *
- * @see {@link Rational} for validating values that are already Rational values
- * @see {@link BigDecimalFromString} for parsing decimal strings
- *
- * @stability unstable
- * @category schemas
- * @since 4.1.3
- */
-export const RationalFromString: RationalFromString = RationalString.pipe(
-  decodeTo(Rational, rationalFromString)
-)
-
-// -----------------------------------------------------------------------------
 // ByteSize schemas
 // -----------------------------------------------------------------------------
 
@@ -11320,7 +11148,7 @@ export type CauseReasonIso<E extends Constraint, D extends Constraint> = {
   readonly error: E["Iso"]
 } | {
   readonly _tag: "Die"
-  readonly defect: D["Iso"]
+  readonly error: D["Iso"]
 } | {
   readonly _tag: "Interrupt"
   readonly fiberId: number | undefined
@@ -11388,7 +11216,7 @@ export function CauseReason<E extends Constraint, D extends Constraint>(
       },
       toCode: ({ typeParameters }) => ({
         runtime: `Schema.CauseReason(${typeParameters[0].runtime}, ${typeParameters[1].runtime})`,
-        Type: `Cause.Reason<${typeParameters[0].Type}>`,
+        Type: `Cause.Failure<${typeParameters[0].Type}, ${typeParameters[1].Type}>`,
         importDeclarations: [`import * as Cause from "effect/Cause"`]
       }),
       expected: "Cause.Failure",
@@ -11509,7 +11337,7 @@ export function Cause<E extends Constraint, D extends Constraint>(error: E, defe
       },
       toCode: ({ typeParameters }) => ({
         runtime: `Schema.Cause(${typeParameters[0].runtime}, ${typeParameters[1].runtime})`,
-        Type: `Cause.Cause<${typeParameters[0].Type}>`,
+        Type: `Cause.Cause<${typeParameters[0].Type}, ${typeParameters[1].Type}>`,
         importDeclarations: [`import * as Cause from "effect/Cause"`]
       }),
       expected: "Cause",
@@ -11534,7 +11362,7 @@ function chunkLink<Value>(values: Schema<ReadonlyArray<Value>>) {
   return link<Chunk_.Chunk<Value>>()(
     values,
     SchemaTransformation.transform({
-      decode: Chunk_.fromArrayUnsafe,
+      decode: Chunk_.fromIterable,
       encode: Arr.fromIterable
     })
   )
@@ -11594,7 +11422,7 @@ export function Chunk<Value extends Constraint>(value: Value): Chunk<Value> {
           return Effect.mapBothEager(
             SchemaParser.decodeUnknownEffect(values)(Arr.fromIterable(input), options),
             {
-              onSuccess: Chunk_.fromArrayUnsafe,
+              onSuccess: Chunk_.fromIterable,
               onFailure: (issue) => SchemaIssue.makeCompositeAtKey(ast, "values", issue, input, options)
             }
           )
@@ -15713,7 +15541,7 @@ export function Exit<
         runtime: `Schema.Exit(${typeParameters[0].runtime}, ${typeParameters[1].runtime}, ${
           typeParameters[2].runtime
         })`,
-        Type: `Exit.Exit<${typeParameters[0].Type}, ${typeParameters[1].Type}>`,
+        Type: `Exit.Exit<${typeParameters[0].Type}, ${typeParameters[1].Type}, ${typeParameters[2].Type}>`,
         importDeclarations: [`import * as Exit from "effect/Exit"`]
       }),
       expected: "Exit",
@@ -18014,15 +17842,14 @@ export function overrideToFormatter<S extends Top>(toFormatter: () => Formatter<
   return (self: S): S["Rebuild"] => self.annotate({ toFormatter })
 }
 /**
- * Derives a string formatter from the decoded type side of a schema. The
- * formatter converts decoded values to human-readable strings, recursing into
- * structs, arrays, and unions.
+ * Derives a string formatter function from a schema. The formatter converts
+ * a value to its human-readable string representation, recursing into structs,
+ * arrays, and unions.
  *
  * **Details**
  *
- * The optional `onBefore` hook receives type-side AST nodes with encoding
- * transformations removed, before the default formatting logic runs.
- * Use {@link toEncoded} before this function to format encoded values.
+ * The optional `onBefore` hook lets you intercept specific AST nodes before
+ * the default formatting logic runs.
  *
  * @stability stable
  * @category formatting
@@ -18052,13 +17879,9 @@ export function overrideToEquivalence<S extends Top>(toEquivalence: () => Equiva
   return (self: S): S["Rebuild"] => self.annotate({ toEquivalence })
 }
 /**
- * Derives an `Equivalence` from the decoded type side of a schema. Two decoded
- * values are considered equal when every field and nested field compares equal
- * according to the schema structure.
- *
- * **Details**
- *
- * Use {@link toEncoded} before this function to compare encoded values.
+ * Derives an `Equivalence` from a schema. Two values are considered equal when
+ * every field (and nested field) compares equal according to the schema
+ * structure.
  *
  * **Example** (Comparing structs)
  *
@@ -18915,27 +18738,6 @@ export function resolveAnnotations<S extends Constraint>(
 export function resolveAnnotationsKey<S extends Constraint>(schema: S): Annotations.Key<S["Type"]> | undefined {
   return schema.ast.context?.annotations
 }
-
-interface DeclarationCodeGenerationAnnotations {
-  /**
-   * Generates runtime and TypeScript source for this declaration.
-   *
-   * @stability experimental
-   * @since 4.0.0
-   */
-  readonly toCode?: SchemaRepresentation.Generation.Declaration | undefined
-}
-
-interface FilterCodeGenerationAnnotations {
-  /**
-   * Generates runtime source for this filter.
-   *
-   * @stability experimental
-   * @since 4.0.0
-   */
-  readonly toCode?: SchemaRepresentation.Generation.Check | undefined
-}
-
 /**
  * The `Annotations` namespace groups all annotation interfaces used to attach
  * metadata to schemas. Annotations control documentation, validation messages,
@@ -19130,7 +18932,7 @@ export declare namespace Annotations {
    * @since 4.0.0
    */
   interface Declaration<T, TypeParameters extends ReadonlyArray<Constraint> = readonly []>
-    extends Bottom<T, TypeParameters>, DeclarationCodeGenerationAnnotations
+    extends Bottom<T, TypeParameters>
   {
     readonly representation?: SchemaRepresentation.RepresentationAnnotation | undefined
     /**
@@ -19192,6 +18994,7 @@ export declare namespace Annotations {
     readonly toCodecArbitrary?: ToArbitrary.Declaration<T, TypeParameters> | undefined
     readonly toEquivalence?: ToEquivalence.Declaration<T, TypeParameters> | undefined
     readonly toFormatter?: ToFormatter.Declaration<T, TypeParameters> | undefined
+    readonly toCode?: SchemaRepresentation.Generation.Declaration | undefined
     /**
      * Used to collect sentinels from a Declaration SchemaAST.
      *
@@ -19207,7 +19010,7 @@ export declare namespace Annotations {
    * @category models
    * @since 4.0.0
    */
-  interface Filter extends Augment, FilterCodeGenerationAnnotations {
+  interface Filter extends Augment {
     readonly representation?: SchemaRepresentation.CheckRepresentationAnnotation<SchemaAST.AST> | undefined
     /**
      * Compiles this filter to a JSON Schema fragment.
@@ -19229,6 +19032,7 @@ export declare namespace Annotations {
      * @see {@link SchemaRepresentation.ToJsonSchema.CheckOutput} for the result contract
      */
     readonly toJsonSchema?: SchemaRepresentation.ToJsonSchema.Check | undefined
+    readonly toCode?: SchemaRepresentation.Generation.Check | undefined
     /**
      * Complete message to use when this filter or refinement fails.
      *

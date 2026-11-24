@@ -992,15 +992,6 @@ describe("SchemaRepresentation built-in declaration revivers", () => {
     })
   })
 
-  it("revives Rational", () => {
-    assertDeclarationReviver({
-      schema: Schema.Rational,
-      id: "effect/schema/Rational",
-      payload: null,
-      reviver: SchemaRepresentation.RationalReviver
-    })
-  })
-
   it("revives SemVer", () => {
     assertDeclarationReviver({
       schema: Schema.SemVer,

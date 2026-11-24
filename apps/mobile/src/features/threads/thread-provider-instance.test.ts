@@ -208,22 +208,13 @@ describe("thread list reorder availability", () => {
                 : current.activeReorderEnvironmentIds,
           };
         };
-        // Active rows sort by an implied key, so moving past an unarranged row writes only the mover.
-        const expectMoveDown = (neighborWritable: boolean) => {
-          const movable = section === "active" || neighborWritable;
-          expect(createThreadMovePlanner(plannerInput())(movedId, "down")?.length).toBe(
-            movable ? (section === "active" ? 1 : 2) : undefined,
-          );
-          expect(computeThreadMoveAvailability(plannerInput()).get(movedId)?.canMoveDown).toBe(
-            movable,
-          );
-        };
-        expectMoveDown(true);
+        expect(createThreadMovePlanner(plannerInput())(movedId, "down")).toHaveLength(2);
         const before = registry.get(environments);
 
         registry.set(connected, [onlineId]);
 
-        expectMoveDown(false);
+        expect(createThreadMovePlanner(plannerInput())(movedId, "down")).toBeNull();
+        expect(computeThreadMoveAvailability(plannerInput()).get(movedId)?.canMoveDown).toBe(false);
         expect(registry.get(environments).pinningEnvironmentIds.has(offlineId)).toBe(true);
         expect(registry.get(environments).settlementEnvironmentIds.has(offlineId)).toBe(true);
         expect(registry.get(environments).providersByEnvironmentId.get(offlineId)).toBe(
@@ -269,7 +260,7 @@ describe("thread list reorder availability", () => {
         );
         expect(updated.pinReorderEnvironmentIds.has(offlineId)).toBe(false);
         expect(updated.activeReorderEnvironmentIds.has(offlineId)).toBe(false);
-        expectMoveDown(false);
+        expect(createThreadMovePlanner(plannerInput())(movedId, "down")).toBeNull();
 
         registry.set(
           configs,
@@ -293,14 +284,16 @@ describe("thread list reorder availability", () => {
 
         registry.set(connected, [onlineId, offlineId]);
 
-        expectMoveDown(true);
+        expect(createThreadMovePlanner(plannerInput())(movedId, "down")).toHaveLength(2);
+        expect(computeThreadMoveAvailability(plannerInput()).get(movedId)?.canMoveDown).toBe(true);
         expect(registry.get(environments).snoozePresetsByEnvironmentId.get(offlineId)).toBe(
           updated.snoozePresetsByEnvironmentId.get(offlineId),
         );
 
         registry.set(configs, new Map([[onlineId, config]]));
 
-        expectMoveDown(false);
+        expect(createThreadMovePlanner(plannerInput())(movedId, "down")).toBeNull();
+        expect(computeThreadMoveAvailability(plannerInput()).get(movedId)?.canMoveDown).toBe(false);
       } finally {
         registry.dispose();
       }

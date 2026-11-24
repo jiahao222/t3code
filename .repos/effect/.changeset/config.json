@@ -15,7 +15,6 @@
   "fixed": [
     [
       "effect",
-      "@effect/ai-amazon-bedrock",
       "@effect/ai-anthropic",
       "@effect/ai-cloudflare",
       "@effect/ai-openai",
@@ -23,11 +22,6 @@
       "@effect/ai-openai-compat",
       "@effect/ai-openrouter",
       "@effect/atom-react",
-      "@effect/chat-slack",
-      "@effect/chat-whatsapp",
-      "@effect/chat-discord",
-      "@effect/chat-telegram",
-      "@effect/chat-teams",
       "@effect/atom-solid",
       "@effect/atom-vue",
       "@effect/docgen",
@@ -37,7 +31,6 @@
       "@effect/opentelemetry",
       "@effect/platform-browser",
       "@effect/platform-bun",
-      "@effect/platform-cloudflare",
       "@effect/platform-deno",
       "@effect/platform-node",
       "@effect/platform-node-shared",

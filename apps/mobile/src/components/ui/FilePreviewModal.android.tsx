@@ -2,7 +2,7 @@ import { T, useGT } from "gt-react-native";
 
 import { Button } from "./Button";
 import * as Dialog from "./Dialog";
-import { createContext, useContext, useEffect, useEffectEvent, useRef } from "react";
+import { createContext, useContext, useEffect, useEffectEvent } from "react";
 import { Modal, View } from "react-native";
 import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -133,23 +133,14 @@ type ImagePreviewProps = {
   readonly onRequestClose: () => void;
 };
 
-const ImagePreviewContext = createContext<
-  (ImagePreviewProps & { readonly getSaveImageSignal: () => AbortSignal }) | null
->(null);
+const ImagePreviewContext = createContext<ImagePreviewProps | null>(null);
 
-// Keyed by page so swiping away clears the busy state and aborts pending share preparation.
 function ImagePreviewHeader(header: { readonly imageIndex: number }) {
-  return <ImagePreviewPageHeader key={header.imageIndex} imageIndex={header.imageIndex} />;
-}
-
-function ImagePreviewPageHeader(header: { readonly imageIndex: number }) {
   const props = useContext(ImagePreviewContext)!;
   const source = props.source.images[header.imageIndex];
   const gt = useGT();
   const insets = useSafeAreaInsets();
-  const mediaActions = useMediaActions(source?.actionsSource, props.onRequestClose, {
-    getSaveImageSignal: props.getSaveImageSignal,
-  });
+  const mediaActions = useMediaActions(source?.actionsSource, props.onRequestClose);
   return (
     <View className="bg-black/70" style={{ paddingTop: insets.top }}>
       <MediaPreviewHeader
@@ -173,23 +164,8 @@ function imageViewingProps(source: FilePreviewImages) {
 }
 
 function ImagePreview(props: ImagePreviewProps) {
-  const saveController = useRef<AbortController | null>(null);
-  const getSaveImageSignal = () => {
-    if (saveController.current === null) {
-      saveController.current = new AbortController();
-    }
-    return saveController.current.signal;
-  };
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- saves survive a page change but stop when the gallery unmounts
-  useEffect(
-    () => () => {
-      saveController.current?.abort();
-      saveController.current = null;
-    },
-    [],
-  );
   return (
-    <ImagePreviewContext value={{ ...props, getSaveImageSignal }}>
+    <ImagePreviewContext value={props}>
       <ImageViewing
         {...imageViewingProps(props.source)}
         visible

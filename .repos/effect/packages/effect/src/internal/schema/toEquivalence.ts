@@ -8,12 +8,10 @@ import * as SchemaAST from "../../SchemaAST.ts"
 import * as SchemaParser from "../../SchemaParser.ts"
 import * as InternalAnnotations from "./annotations.ts"
 
-const recurMemo = memoize(recur)
-
 /** @internal */
-export const toEquivalence = (ast: SchemaAST.AST): Equivalence.Equivalence<any> => {
-  return recurMemo(SchemaAST.toType(ast))
-}
+export const toEquivalence = memoize((ast: SchemaAST.AST): Equivalence.Equivalence<any> => {
+  return recur(ast)
+})
 
 function recur(ast: SchemaAST.AST): Equivalence.Equivalence<any> {
   // ---------------------------------------------
@@ -137,9 +135,9 @@ function recur(ast: SchemaAST.AST): Equivalence.Equivalence<any> {
       })
     }
     case "Union": {
-      const types = ast.types
+      const types = SchemaAST.toType(ast).types
       const index = SchemaAST.getCandidateIndex(types)
-      const compiled = types.map((candidate) => [SchemaParser._is(candidate), recur(candidate)] as const)
+      const compiled = types.map((candidate, i) => [SchemaParser._is(candidate), recur(ast.types[i])] as const)
       return Equivalence.make((a, b) => {
         const candidates = index(a, false)
         for (let i = 0; i < candidates.length; i++) {

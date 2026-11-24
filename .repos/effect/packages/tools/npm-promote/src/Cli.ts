@@ -5,7 +5,6 @@ import * as Console from "effect/Console"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner"
 import * as Semver from "semver"
 import type { ReleasePackage } from "./NpmPromote.ts"
 import { NpmPromoteError } from "./NpmPromoteError.ts"
@@ -36,8 +35,7 @@ const run = Effect.fnUntraced(function*(options: {
   readonly dryRun: boolean
   readonly overdueAfterHours: number
 }) {
-  const cwd = process.cwd()
-  const workspace = yield* Workspace.releasePackages(cwd)
+  const workspace = yield* Workspace.releasePackages(process.cwd())
   const effect = workspace.find((pkg) => pkg.name === "effect")
   if (effect === undefined) {
     return yield* new NpmPromoteError({ message: "The workspace has no public effect package" })
@@ -70,10 +68,7 @@ const run = Effect.fnUntraced(function*(options: {
 
   yield* promoteRelease({
     packages: workspace.map(({ name, version }): ReleasePackage => ({ name, version })),
-    bump: bump.value,
-    packagesAtBump: Workspace.packagesAtBump(cwd, bump.value.sha, effect.version).pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, yield* ChildProcessSpawner.ChildProcessSpawner)
-    )
+    bump: bump.value
   }, options).pipe(Effect.provide(services))
 })
 

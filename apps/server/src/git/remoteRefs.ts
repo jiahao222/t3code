@@ -1,9 +1,7 @@
-import { trimAsciiWhitespace } from "@t3tools/contracts";
-
 export function parseRemoteNamesInGitOrder(stdout: string): ReadonlyArray<string> {
   const remoteNames: Array<string> = [];
   for (const line of stdout.split("\n")) {
-    const remoteName = trimAsciiWhitespace(line);
+    const remoteName = line.trim();
     if (remoteName.length > 0) {
       remoteNames.push(remoteName);
     }
@@ -19,7 +17,7 @@ export function parseRemoteRefWithRemoteNames(
   ref: string,
   remoteNames: ReadonlyArray<string>,
 ): { remoteRef: string; remoteName: string; branchName: string } | null {
-  const trimmedRef = trimAsciiWhitespace(ref);
+  const trimmedRef = ref.trim();
   if (trimmedRef.length === 0) {
     return null;
   }
@@ -29,7 +27,7 @@ export function parseRemoteRefWithRemoteNames(
     if (!trimmedRef.startsWith(remotePrefix)) {
       continue;
     }
-    const branchName = trimmedRef.slice(remotePrefix.length);
+    const branchName = trimmedRef.slice(remotePrefix.length).trim();
     if (branchName.length === 0) {
       return null;
     }
@@ -50,7 +48,7 @@ export function extractBranchNameFromRemoteRef(
     remoteNames?: ReadonlyArray<string>;
   },
 ): string {
-  const normalized = trimAsciiWhitespace(ref);
+  const normalized = ref.trim();
   if (normalized.length === 0) {
     return "";
   }
@@ -69,5 +67,5 @@ export function extractBranchNameFromRemoteRef(
   if (firstSlash === -1) {
     return normalized;
   }
-  return normalized.slice(firstSlash + 1);
+  return normalized.slice(firstSlash + 1).trim();
 }

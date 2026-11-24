@@ -30,7 +30,6 @@ import * as Option from "./Option.ts"
 import type { Pipeable } from "./Pipeable.ts"
 import * as Predicate from "./Predicate.ts"
 import * as Scope from "./Scope.ts"
-import * as Tracer from "./Tracer.ts"
 
 const TypeId = "~effect/ScopedCache"
 
@@ -136,11 +135,6 @@ export interface Entry<A, E> {
  * `requireServicesAt` controls whether lookup services are captured at
  * construction time or required when lookup operations run.
  *
- * Lookups do not inherit the span active when `get` or `refresh` runs them,
- * because a cached entry is shared by every later request. Spans created inside
- * a lookup are children of the span active when the cache was constructed, if
- * any.
- *
  * @see {@link make} for creating a scoped cache with one fixed time-to-live
  *
  * @stability stable
@@ -169,9 +163,7 @@ export const makeWith = <
     self.lookup = (key: Key): Effect.Effect<A, E> =>
       effect.updateContext(
         options.lookup(key),
-        // Entry finalizers capture this context until the entry is removed, so
-        // drop the requester's span to avoid retaining it and its exit value.
-        (input) => Context.merge(context, omitParentSpan(input))
+        (input) => Context.merge(context, input)
       )
     const map = MutableHashMap.empty<Key, Entry<A, E>>()
     self.state = { _tag: "Open", map }
@@ -191,8 +183,6 @@ export const makeWith = <
     )
   })
 
-const omitParentSpan = Context.omit(Tracer.ParentSpan)
-
 /**
  * Creates a `ScopedCache` with a fixed time-to-live for every lookup result.
  *
@@ -208,8 +198,6 @@ const omitParentSpan = Context.omit(Tracer.ParentSpan)
  * entry scopes are closed when entries are invalidated, are evicted, or when
  * the cache's owning scope closes. Expiry cleanup is lazy: expired entries close
  * on access to that key or a `keys`/`values`/`entries` scan, not in the background.
- * Lookups do not inherit the span active when `get` or `refresh` runs them;
- * they use the span active when the cache was constructed, if any.
  *
  * @see {@link makeWith} for computing time-to-live from each lookup result and key
  *
@@ -297,7 +285,6 @@ export const get: {
           MutableHashMap.set(state.map, key, oentry.value)
           return awaitEntry(self, key, oentry.value, restore)
         }
-        const clock = fiber.getRef(effect.ClockRef)
         const scope = Scope.makeUnsafe()
         const deferred = Deferred.makeUnsafe<A, E>()
         const entry: Entry<A, E> = {
@@ -318,15 +305,10 @@ export const get: {
                   Deferred.doneUnsafe(deferred, exit)
                   return Scope.close(scope, exit)
                 }
-                if (self.state._tag === "Closed") {
-                  Deferred.doneUnsafe(deferred, effect.exitInterrupt())
-                  // Detached entries may not have been closed by owner shutdown.
-                  return Scope.close(scope, effect.exitVoid)
-                }
                 try {
                   const ttl = self.timeToLive(exit, key)
                   if (Duration.isFinite(ttl)) {
-                    entry.expiresAt = clock.currentTimeMillisUnsafe() + Duration.toMillis(ttl)
+                    entry.expiresAt = fiber.getRef(effect.ClockRef).currentTimeMillisUnsafe() + Duration.toMillis(ttl)
                   }
                 } finally {
                   Deferred.doneUnsafe(deferred, exit)

@@ -61,12 +61,6 @@ export * as Mac from "./Mac.ts"
 
 /**
  * @stability unstable
- * @since 4.1.5
- */
-export * as Password from "./Password.ts"
-
-/**
- * @stability unstable
  * @since 4.0.0
  */
 export * as SecureRandom from "./SecureRandom.ts"

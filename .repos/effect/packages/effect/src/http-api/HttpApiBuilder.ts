@@ -31,8 +31,6 @@ import { HttpServerRequest } from "../http/HttpServerRequest.ts"
 import * as Respondable from "../http/HttpServerRespondable.ts"
 import * as Response from "../http/HttpServerResponse.ts"
 import type { HttpServerResponse } from "../http/HttpServerResponse.ts"
-import * as MediaType from "../http/internal/mediaType.ts"
-import { addRedactedNamesUnsafe } from "../http/internal/requestState.ts"
 import * as Multipart from "../http/Multipart.ts"
 import * as UrlParams from "../http/UrlParams.ts"
 import { stringOrRedacted } from "../internal/redacted.ts"
@@ -57,6 +55,7 @@ import type * as HttpApiGroup from "./HttpApiGroup.ts"
 import * as HttpApiMiddleware from "./HttpApiMiddleware.ts"
 import * as HttpApiSchema from "./HttpApiSchema.ts"
 import type * as HttpApiSecurity from "./HttpApiSecurity.ts"
+import * as MediaType from "./internal/mediaType.ts"
 import * as HttpApiPath from "./internal/path.ts"
 import * as OpenApi from "./OpenApi.ts"
 
@@ -967,9 +966,8 @@ function handlerToHttpEffect(
 
   const shouldParsePayload = endpoint.payload.size > 0 && !isRaw
   const payloadBy = shouldParsePayload ? buildPayloadDecoders(endpoint.payload, options.payload) : undefined
-  const redactedNames = HttpApi.getEndpointRedactedNames(api, group, endpoint)
 
-  const effect = applyMiddleware(
+  return applyMiddleware(
     group,
     endpoint,
     context,
@@ -1059,12 +1057,6 @@ function handlerToHttpEffect(
     }),
     Effect.provideContext(context)
   )
-  if (redactedNames === undefined) return effect
-  // Added before middleware and decoding run, so their failures are redacted too.
-  return Effect.withFiber((fiber) => {
-    addRedactedNamesUnsafe(fiber.context, redactedNames.query, redactedNames.headers)
-    return effect
-  })
 }
 
 /**
@@ -1081,10 +1073,7 @@ export function handlerToRoute(
     endpoint.method,
     HttpApiPath.toRouterPath(endpoint.path, endpoint.params) as HttpRouter.PathInput,
     handlerToHttpEffect(api, group, endpoint, context, handler.handler, handler.isRaw),
-    {
-      uninterruptible: handler.uninterruptible,
-      redactedParams: HttpApi.getEndpointRedactedParams(api, group, endpoint)
-    }
+    { uninterruptible: handler.uninterruptible }
   )
 }
 
@@ -1266,18 +1255,8 @@ function makeStreamBodyEncoder(
       )
   }
   const sseEncoder = makeSseEncoder(streamSchema, options)
-  const keepAlive = streamSchema.keepAlive
-  if (keepAlive === undefined) {
-    return (stream) => encodeSseStream(stream, sseEncoder)
-  }
-  const keepAliveComments = Stream.tick(keepAlive).pipe(
-    Stream.drop(1),
-    Stream.map(() => keepAliveComment)
-  )
-  return (stream) => Stream.merge(encodeSseStream(stream, sseEncoder), keepAliveComments, { haltStrategy: "left" })
+  return (stream) => encodeSseStream(stream, sseEncoder)
 }
-
-const keepAliveComment = new TextEncoder().encode(": keepalive\n\n")
 
 function getUpgradeSuccessSchema(endpoint: HttpApiEndpoint.Top): HttpApiSchema.Upgrade | undefined {
   for (const schema of endpoint.success) {

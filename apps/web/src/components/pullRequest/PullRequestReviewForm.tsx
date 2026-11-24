@@ -63,7 +63,6 @@ export function PullRequestReviewForm({
   environmentId,
   active,
   reference,
-  headSha,
   completionScope,
   term,
   verdicts,
@@ -72,14 +71,11 @@ export function PullRequestReviewForm({
   pending,
   onPendingChange,
   onSubmitted,
-  onRefused,
 }: {
   environmentId: EnvironmentId;
   /** False while the form stays mounted but hidden; dictation is cancelled then. */
   active: boolean;
   reference: PullRequestRef;
-  /** The head on screen, which the review is pinned to. */
-  headSha: string | undefined;
   completionScope: PullRequestCompletionScope | null;
   term: ChangeRequestTermKind;
   verdicts: ReadonlyArray<PullRequestReviewVerdict>;
@@ -88,7 +84,6 @@ export function PullRequestReviewForm({
   pending: boolean;
   onPendingChange: (pending: boolean) => void;
   onSubmitted: () => void;
-  onRefused: () => void;
 }) {
   const gt = useGT();
   const resolve = useMessages();
@@ -130,7 +125,6 @@ export function PullRequestReviewForm({
       environmentId,
       input: {
         ...reference,
-        ...(headSha === undefined ? {} : { expectedHeadSha: headSha }),
         verdict: verdict.value,
         body: submittedBody,
         comments: submittedComments,
@@ -146,7 +140,6 @@ export function PullRequestReviewForm({
           m(msg("The host refused the review. Your draft is still here to try again.")),
         ),
       });
-      onRefused();
       return;
     }
     // Preserve comments and summary edits made during submission.

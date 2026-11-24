@@ -1,4 +1,3 @@
-import { githubEmojiAliases } from "@t3tools/client-runtime/pull-request-markdown";
 import type { ReferenceAutolink } from "@t3tools/client-runtime/source-control-clients";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
@@ -27,53 +26,28 @@ const UNLINKED_TYPES = new Set([
   "definition",
 ]);
 
-const unchanged = (offset: number) => offset;
-
 /**
- * Rewrites the references `autolinks` finds in the markdown's prose as markdown links, and GitHub's
- * `:alias:` emoji as the emoji, because the native renderer takes markdown text. Text is searched
- * as written, escapes included. `sourceOffset` maps an offset in the result back to `markdown`.
+ * Rewrites the references `autolinks` finds in the markdown's prose as markdown links, because the
+ * native renderer takes markdown text. Text is searched as written, escapes included.
  */
-export function nativePullRequestMarkdown(
+export function linkReferenceAutolinks(
   markdown: string,
   autolinks: ((text: string) => ReadonlyArray<ReferenceAutolink>) | null,
-  githubEmoji: boolean,
-): { readonly markdown: string; readonly sourceOffset: (offset: number) => number } {
-  if (autolinks === null && !githubEmoji) return { markdown, sourceOffset: unchanged };
+): string {
+  if (autolinks === null) return markdown;
   const edits: { start: number; end: number; value: string }[] = [];
-  const visit = (node: MarkdownNode, inLink: boolean) => {
-    // Only a bracketed label is prose; an autolink's text is its destination.
-    const labelled = markdown[node.position?.start.offset ?? -1] === "[";
-    if (node.type === "link" && labelled && !inLink) {
-      node.children?.forEach((child) => visit(child, true));
-      return;
-    }
+  const visit = (node: MarkdownNode) => {
     if (UNLINKED_TYPES.has(node.type)) return;
     if (node.type === "text") {
       const start = node.position?.start.offset;
       const end = node.position?.end.offset;
       if (start === undefined || end === undefined) return;
-      const text = markdown.slice(start, end);
-      const found: { start: number; end: number; value: string }[] = [];
-      for (const link of inLink ? [] : (autolinks?.(text) ?? [])) {
-        found.push({
+      for (const link of autolinks(markdown.slice(start, end))) {
+        edits.push({
           start: start + link.index,
           end: start + link.index + link.text.length,
           value: `[${link.label}](${link.url})`,
         });
-      }
-      for (const alias of githubEmoji ? githubEmojiAliases(text) : []) {
-        // Keycap emoji start with `*`, which the native parser would read as emphasis.
-        const value = alias.emoji.replaceAll("*", "\\*");
-        found.push({
-          start: start + alias.index,
-          end: start + alias.index + alias.text.length,
-          value,
-        });
-      }
-      found.sort((left, right) => left.start - right.start);
-      for (const edit of found) {
-        if (edit.start >= (edits.at(-1)?.end ?? 0)) edits.push(edit);
       }
     } else if (node.children !== undefined) {
       let protectedHtmlDepth = 0;
@@ -85,31 +59,15 @@ export function nativePullRequestMarkdown(
           for (const match of tag.matchAll(/<(\/)?(?:a|code|pre|script|style)(?=[\s>])[^>]*>/giu)) {
             protectedHtmlDepth = Math.max(0, protectedHtmlDepth + (match[1] ? -1 : 1));
           }
-        } else if (protectedHtmlDepth === 0) visit(child, inLink);
+        } else if (protectedHtmlDepth === 0) visit(child);
       }
     }
   };
-  visit(parser.parse(markdown), false);
-  if (edits.length === 0) return { markdown, sourceOffset: unchanged };
-  let rewritten = "";
-  let cursor = 0;
-  // Where each edit ends in the result, and how far `markdown` is ahead from there on.
-  const shifts: { end: number; delta: number }[] = [];
-  for (const edit of edits) {
-    rewritten += markdown.slice(cursor, edit.start) + edit.value;
-    cursor = edit.end;
-    shifts.push({ end: rewritten.length, delta: edit.end - rewritten.length });
+  visit(parser.parse(markdown));
+  let linked = markdown;
+  for (let index = edits.length - 1; index >= 0; index--) {
+    const edit = edits[index]!;
+    linked = linked.slice(0, edit.start) + edit.value + linked.slice(edit.end);
   }
-  rewritten += markdown.slice(cursor);
-  return {
-    markdown: rewritten,
-    sourceOffset(offset) {
-      let delta = 0;
-      for (const shift of shifts) {
-        if (shift.end > offset) break;
-        delta = shift.delta;
-      }
-      return offset + delta;
-    },
-  };
+  return linked;
 }

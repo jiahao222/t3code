@@ -1,14 +1,9 @@
 // Effect-free so the service launcher shares the pre-lock owner identity check with server startup.
-import { windowsPowerShellPath } from "@t3tools/shared/windowsSystem";
 
-export const legacyOwnerStartTimeCommand = (
-  pid: number,
-  platform: NodeJS.Platform,
-  hostEnv: NodeJS.ProcessEnv,
-) => {
+export const legacyOwnerStartTimeCommand = (pid: number, platform: NodeJS.Platform) => {
   const windows = platform === "win32";
   return {
-    command: windows ? windowsPowerShellPath(hostEnv) : "ps",
+    command: windows ? "powershell.exe" : "ps",
     args: windows
       ? [
           "-NoProfile",

@@ -3,7 +3,10 @@ import * as NodeModule from "node:module";
 import * as NodeSea from "node:sea";
 import * as NodeURL from "node:url";
 
+import { installLocalEgressGuard } from "@t3tools/shared/localEgressGuard";
 import { isEntrypoint } from "./entrypoint.ts";
+
+installLocalEgressGuard("server");
 
 // Loads the CLI outside the launcher's module graph. Packaged builds embed it as a raw asset.
 async function loadCliMain(): Promise<typeof import("./binMain.ts")> {
@@ -53,10 +56,6 @@ if (
   const launcherOptions = launcher?.parseServiceLauncherArgs(process.argv.slice(3));
   if (launcher !== undefined && launcherOptions !== undefined) {
     await launcher.runServiceLauncherCli(launcherOptions);
-  } else if (process.argv[2] === "__process-launcher") {
-    // Single executables host the launcher here; other builds start process-launcher.mjs directly.
-    const { runProcessLauncher } = await import("./process/processLauncherWorker.ts");
-    runProcessLauncher();
   } else {
     const { runCliCommand } = await loadCliMain();
     await runCliCommand();

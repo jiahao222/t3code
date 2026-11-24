@@ -1,10 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { StaticScreenProps } from "@react-navigation/native";
-import {
-  hasIssueTrackerTeams,
-  issueTrackerBindings,
-  issueTrackerSummary,
-} from "@t3tools/client-runtime/state/issue-trackers";
+import { issueTrackerSummary } from "@t3tools/client-runtime/state/issue-trackers";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import {
   AuthSettingsWriteScope,
@@ -168,7 +164,6 @@ export function SettingsIssueTrackerRouteScreen({
 }: StaticScreenProps<{
   readonly environmentId: EnvironmentId;
   readonly tracker: string;
-  readonly accountId?: string;
 }>) {
   const gt = useGT();
   const messages = useMessages();
@@ -178,17 +173,9 @@ export function SettingsIssueTrackerRouteScreen({
     issueTrackerEnvironment.connections({ environmentId, input: {} }),
   );
   const canEdit = useAtomValue(issueTrackerEnvironment.connect.permissionAtom(environmentId));
-  const tracker = [...(query.data?.trackers ?? []), ...(query.data?.accounts ?? [])].find(
-    (entry) => entry.tracker === route.params.tracker && entry.accountId === route.params.accountId,
-  );
+  const tracker = query.data?.trackers.find((entry) => entry.tracker === route.params.tracker);
   const disabled = !canWrite || !canEdit;
   const usable = tracker?.connected === true && tracker.account !== null;
-  const canAddAccount =
-    tracker !== undefined &&
-    route.params.accountId === undefined &&
-    (tracker.connected ||
-      (query.data?.accounts ?? []).some((account) => account.tracker === tracker.tracker)) &&
-    environment?.serverConfig.environment.capabilities.issueTrackerAccounts === true;
   return (
     <DetailPage title={tracker?.displayName ?? gt("Issue tracker")}>
       {!environment || !tracker ? (
@@ -196,7 +183,7 @@ export function SettingsIssueTrackerRouteScreen({
       ) : (
         <>
           <Text selectable className="px-2 text-sm text-foreground-muted">
-            {issueTrackerSummary(tracker, issueTrackerBindings(query.data), messages)}
+            {issueTrackerSummary(tracker, query.data?.bindings ?? {}, messages)}
           </Text>
           <SettingsSection title={tracker.credential.label}>
             <IssueTrackerCredentialForm
@@ -205,36 +192,19 @@ export function SettingsIssueTrackerRouteScreen({
               disabled={disabled}
             />
           </SettingsSection>
-          {usable && hasIssueTrackerTeams(tracker, issueTrackerBindings(query.data)) ? (
+          {usable && tracker.scopes.length > 0 ? (
             <SettingsSection
               title={gt("Projects")}
               footer={gt(
-                "Pick one or more {tracker} {scope}s for each project. Their issues list beside the repository's own, and agents file new issues in the first one unless asked for another.",
+                "Pick the {tracker} {scope} whose issues each project lists beside its repository's own.",
                 { tracker: tracker.displayName, scope: tracker.scopeNoun },
               )}
             >
               <IssueTrackerProjectRows
                 environmentId={environmentId}
                 tracker={tracker}
-                bindings={issueTrackerBindings(query.data)}
-                refreshing={query.isPending}
-                refreshFailed={query.error !== null}
+                bindings={query.data?.bindings ?? {}}
                 disabled={disabled}
-              />
-            </SettingsSection>
-          ) : null}
-          {canAddAccount ? (
-            <SettingsSection
-              title={gt("Another account")}
-              footer={gt("Connect a second {tracker} workspace or user.", {
-                tracker: tracker.displayName,
-              })}
-            >
-              <IssueTrackerCredentialForm
-                environmentId={environmentId}
-                tracker={tracker}
-                disabled={disabled}
-                addAccount
               />
             </SettingsSection>
           ) : null}

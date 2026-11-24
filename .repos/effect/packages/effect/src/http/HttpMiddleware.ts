@@ -42,8 +42,7 @@ import * as TraceContext from "./HttpTraceContext.ts"
 import * as compressionInternal from "./internal/compression.ts"
 import * as decompressionInternal from "./internal/decompression.ts"
 import * as bodyInternal from "./internal/httpBody.ts"
-import * as RedactedPath from "./internal/redactedPath.ts"
-import { appendPreResponseHandlerUnsafe, CurrentRequestState, type RequestState } from "./internal/requestState.ts"
+import { appendPreResponseHandlerUnsafe, CurrentRequestState } from "./internal/requestState.ts"
 import * as tracing from "./internal/tracing.ts"
 import * as internalUrlParams from "./internal/urlParams.ts"
 import * as UrlParams from "./UrlParams.ts"
@@ -221,16 +220,12 @@ export const logger: <E, R>(
   Effect.withFiber((fiber) => {
     const request = Context.getUnsafe(fiber.context, HttpServerRequest)
     const state = Context.getOrUndefined(fiber.context, CurrentRequestState)
+    const path = internalUrlParams.stripSearchAndHash(request.url)
     return Effect.withLogSpan(
       Effect.flatMap(Effect.exit(httpApp), (exit) => {
         if (state?.loggerDisabled) {
           return exit
-        }
-        // Read on exit because the router records `redactedPath` on match.
-        const path = state?.redactedPath !== undefined
-          ? RedactedPath.format(state.redactedPath)
-          : internalUrlParams.stripSearchAndHash(request.url)
-        if (exit._tag === "Failure") {
+        } else if (exit._tag === "Failure") {
           const [response, cause] = causeResponseStripped(exit.cause)
           const message = Option.isSome(cause) &&
               !cause.value.reasons.every((reason) =>
@@ -273,21 +268,14 @@ export const isTracerDisabledUnsafe = (
 const responseSpanExit = (
   fiber: Fiber.Fiber<unknown, unknown>,
   request: HttpServerRequest,
-  response: HttpServerResponse,
-  state: RequestState | undefined
+  response: HttpServerResponse
 ): Exit.Exit<HttpServerResponse, HttpServerError> => {
   if (!(response.status >= 500 && response.status < 600)) {
     return Exit.succeed(response)
   }
   // The message is path-only, but exporters can still read `error.request.url`
   // after the request-scoped redacted names are gone.
-  let url = UrlParams.redactUrl(
-    request.url,
-    withStateNames(fiber.getRef(UrlParams.CurrentRedactedNames), state?.redactedUrlParamNames)
-  )
-  if (state?.redactedPath !== undefined) {
-    url = RedactedPath.format(state.redactedPath) + url.slice(internalUrlParams.stripSearchAndHash(url).length)
-  }
+  const url = UrlParams.redactUrl(request.url, fiber.getRef(UrlParams.CurrentRedactedNames))
   if (url !== request.url) {
     request = request.modify({ url })
   }
@@ -299,12 +287,6 @@ const responseSpanExit = (
     setStackTraceLimit(stackTraceLimit)
   }
 }
-
-const withStateNames = (
-  names: ReadonlyArray<string | RegExp>,
-  stateNames: ReadonlyArray<string | RegExp> | undefined
-): ReadonlyArray<string | RegExp> =>
-  stateNames === undefined || stateNames.length === 0 ? names : [...names, ...stateNames]
 
 /**
  * Middleware that creates a server trace span for each request and records request and response HTTP attributes.
@@ -331,12 +313,11 @@ export const tracer: <E, R>(
     internalEffect.onExitUnsafe<HttpServerResponse, unknown>(fiber, (exit) => {
       fiber.setContext(prevServices)
       const endTime = fiber.getRef(Clock).currentTimeNanosUnsafe()
-      const state = Context.getOrUndefined(prevServices, CurrentRequestState)
       if (Exit.isSuccess(exit) && (!span.sampled || fiber.getRef(Tracer) === nativeTracer)) {
-        span.end(endTime, responseSpanExit(fiber, request, exit.value, state))
+        span.end(endTime, responseSpanExit(fiber, request, exit.value))
         return undefined
       }
-      const redactedHeaderNames = withStateNames(fiber.getRef(Headers.CurrentRedactedNames), state?.redactedHeaderNames)
+      const redactedHeaderNames = fiber.getRef(Headers.CurrentRedactedNames)
       const headerFilter = fiber.getRef(TracerHeaderFilter)
       // Complete the span before the request fiber exits so shutdown can flush it.
       let response: HttpServerResponse
@@ -347,21 +328,16 @@ export const tracer: <E, R>(
         // OpenTelemetry only treats 5xx responses as server span errors; interrupts still fail the span.
         spanExit = Option.isSome(cause) && (response.status >= 500 || Cause.hasInterrupts(cause.value))
           ? Exit.failCause(cause.value)
-          : responseSpanExit(fiber, request, response, state)
+          : responseSpanExit(fiber, request, response)
       } else {
         response = exit.value
-        spanExit = responseSpanExit(fiber, request, response, state)
+        spanExit = responseSpanExit(fiber, request, response)
       }
       if (span.sampled) {
         span.attribute("http.request.method", request.method)
         const url = Request.toURL(request)
         if (Option.isSome(url)) {
-          if (state?.redactedPath !== undefined) url.value.pathname = RedactedPath.format(state.redactedPath)
-          tracing.addUrlAttributes(
-            span,
-            url.value,
-            withStateNames(fiber.getRef(UrlParams.CurrentRedactedNames), state?.redactedUrlParamNames)
-          )
+          tracing.addUrlAttributes(span, url.value, fiber.getRef(UrlParams.CurrentRedactedNames))
         }
         if (request.headers["user-agent"] !== undefined) {
           span.attribute("user_agent.original", request.headers["user-agent"])
@@ -561,8 +537,8 @@ export const cors = (options?: {
     : (origin: string) => (opts.allowedOrigins as ReadonlyArray<string>).includes(origin)
 
   const allowOrigin = typeof opts.allowedOrigins === "function" || opts.allowedOrigins.length > 1
-    ? ((originHeader: string | undefined): ReadonlyRecord<string, string> => {
-      if (originHeader === undefined || !isAllowedOrigin(originHeader)) return { vary: "Origin" }
+    ? ((originHeader: string): ReadonlyRecord<string, string> => {
+      if (!isAllowedOrigin(originHeader)) return { vary: "Origin" }
       return {
         "access-control-allow-origin": originHeader,
         vary: "Origin"

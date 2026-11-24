@@ -2,10 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import * as Effect from "effect/Effect";
-import * as HttpServerResponse from "effect/http/HttpServerResponse";
-import { afterEach, describe, expect, it } from "@effect/vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import * as HttpResponseErrorGuard from "./httpResponseErrorGuard.ts";
 
@@ -242,30 +239,4 @@ describe("rejectRequestsUntilServing", () => {
     expect(servingUpgrade.headers["retry-after"]).toBeUndefined();
     expect(writeErrors).toEqual([]);
   });
-
-  it.effect(
-    "rejects early requests on NodeHttpServer, which adds its own listener before listening",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const server = yield* NodeHttpServer.make(
-            () =>
-              HttpResponseErrorGuard.rejectRequestsUntilServing(
-                HttpResponseErrorGuard.keepIdleConnections(
-                  guardHttpResponseWriteErrors(NodeHttp.createServer()),
-                ),
-              ),
-            { host: "127.0.0.1", port: 0 },
-          );
-          const port = (server.address as { readonly port: number }).port;
-
-          const early = yield* Effect.promise(() => fetchResponse(port, "/"));
-          expect(early.statusCode).toBe(503);
-          expect(early.headers["retry-after"]).toBe("1");
-
-          yield* server.serve(Effect.succeed(HttpServerResponse.empty({ status: 204 })));
-          expect(yield* Effect.promise(() => fetchStatus(port, "/"))).toBe(204);
-        }),
-      ),
-  );
 });

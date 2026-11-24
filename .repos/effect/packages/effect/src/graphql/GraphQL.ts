@@ -245,10 +245,7 @@ const Proto = {
 
 // The middleware type of an operation is phantom and its Schemas are erased to
 // `Schema.Top` here, so the typed constructors below state their operation
-// type with one assertion each. Each constructor also asserts to its own
-// declared type: TypeScript 7.1 relates the `Variables` conditional in
-// `makeOperation` to the one in the constructor's annotation structurally
-// rather than by identity, and the structural check fails.
+// type with one assertion each.
 const makeProto = (fields: Omit<Any, typeof TypeId | "pipe" | "middleware">): Any =>
   Object.assign(Object.create(Proto), fields)
 
@@ -326,7 +323,7 @@ export const query: <
     readonly result: Result
   }
 ) => Operation<"query", Name, Variables extends Schema.Struct.Fields ? Schema.Struct<Variables> : Variables, Result> =
-  makeOperation("query") as typeof query
+  makeOperation("query")
 
 /**
  * Defines a mutation. Same shape as {@link query}.
@@ -366,7 +363,7 @@ export const mutation: <
   Name,
   Variables extends Schema.Struct.Fields ? Schema.Struct<Variables> : Variables,
   Result
-> = makeOperation("mutation") as typeof mutation
+> = makeOperation("mutation")
 
 /**
  * Defines a subscription. The client method for a subscription returns a
@@ -407,7 +404,7 @@ export const subscription: <
   Name,
   Variables extends Schema.Struct.Fields ? Schema.Struct<Variables> : Variables,
   Result
-> = makeOperation("subscription") as typeof subscription
+> = makeOperation("subscription")
 
 /**
  * The `__typename` Schema for the "every other type" member of a generated

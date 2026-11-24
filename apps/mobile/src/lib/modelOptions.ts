@@ -64,7 +64,7 @@ export type ModelOption = {
 
 type ProviderUpdateRequired = Pick<
   T3ServerConfig["providers"][number],
-  "driver" | "updateRequiredModels" | "versionAdvisory"
+  "driver" | "updateRequiredModels"
 >;
 
 export type ProviderGroup = {
@@ -400,11 +400,7 @@ export function buildModelOptions(
     const providerLabel = providerDisplayLabel(provider);
     const providerBadge = providerBadgeFor(provider.instanceId);
     const updateRequired = provider.updateRequiredModels?.length
-      ? {
-          driver: provider.driver,
-          updateRequiredModels: provider.updateRequiredModels,
-          ...(provider.versionAdvisory ? { versionAdvisory: provider.versionAdvisory } : {}),
-        }
+      ? { driver: provider.driver, updateRequiredModels: provider.updateRequiredModels }
       : undefined;
     const preferences = config?.settings?.providerModelPreferences?.[provider.instanceId];
     const hiddenModels = new Set(preferences?.hiddenModels ?? []);

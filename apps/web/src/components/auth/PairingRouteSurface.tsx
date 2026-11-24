@@ -11,7 +11,6 @@ import {
   submitServerAuthCredential,
 } from "../../environments/primary";
 import { readHostedPairingRequest } from "../../hostedPairing";
-import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
@@ -147,31 +146,17 @@ export function HostedPairingRouteSurface() {
     reportFailure: false,
   });
   const [request] = useState(readHostedPairingRequest);
-  // The origin shows the scheme along with the host.
-  const [origin] = useState(() => {
-    if (!request) return null;
-    try {
-      return new URL(
-        resolveRemotePairingTarget({ host: request.host, pairingCode: request.token }).httpBaseUrl,
-      ).origin;
-    } catch {
-      return null;
-    }
-  });
   const gt = useGT();
-  const [status, setStatus] = useState<"confirm" | "pairing" | "paired" | "error">(
-    origin ? "confirm" : "error",
+  const [status, setStatus] = useState<"pairing" | "paired" | "error">(
+    request ? "pairing" : "error",
   );
   const [message, setMessage] = useState(() =>
-    origin
-      ? m(msg("This link adds a backend to this browser. Continue only if you trust it."))
-      : request
-        ? m(msg("This pairing link has an invalid backend host."))
-        : m(msg("This pairing link is missing its backend host or token.")),
+    request
+      ? m(msg("Connecting to this backend."))
+      : m(msg("This pairing link is missing its backend host or token.")),
   );
   const [canRetry, setCanRetry] = useState(false);
-  // Nothing is sent to the link's host until the user confirms.
-  // The token stays in the URL until then: the root route picks this page from it.
+  const submitAttemptedRef = useRef(false);
   const tokenSubmittedRef = useRef(false);
 
   const submitHostedPairingRequest = async () => {
@@ -195,7 +180,6 @@ export function HostedPairingRouteSurface() {
     setMessage(gt("Connecting to this backend."));
     setCanRetry(false);
     tokenSubmittedRef.current = true;
-    stripPairingTokenFromUrl();
 
     const result = await connectPairingEnvironment({
       host: request.host,
@@ -222,6 +206,21 @@ export function HostedPairingRouteSurface() {
     );
   };
 
+  const submitOnMount = useEffectEvent(() => {
+    void submitHostedPairingRequest();
+  });
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- strips the pairing token from the URL and submits the hosted pairing request once on mount
+  useEffect(() => {
+    if (submitAttemptedRef.current) {
+      return;
+    }
+    submitAttemptedRef.current = true;
+
+    stripPairingTokenFromUrl();
+    submitOnMount();
+  }, []);
+
   return (
     <StandalonePage>
       <StandalonePageHeader
@@ -230,9 +229,7 @@ export function HostedPairingRouteSurface() {
             ? gt("Backend paired")
             : status === "error"
               ? gt("Pairing failed")
-              : status === "confirm"
-                ? gt("Add this backend?")
-                : gt("Pairing backend")
+              : gt("Pairing backend")
         }
         description={message}
       />
@@ -242,7 +239,7 @@ export function HostedPairingRouteSurface() {
           <T>
             Host:{" "}
             <span className="font-mono text-foreground/80">
-              <Var>{origin ?? request.host}</Var>
+              <Var>{request.host}</Var>
             </span>
           </T>
         </div>
@@ -260,23 +257,7 @@ export function HostedPairingRouteSurface() {
       ) : null}
 
       <div className="mt-6 flex flex-wrap gap-2">
-        {status === "confirm" ? (
-          <>
-            <Button size="sm" onClick={() => void submitHostedPairingRequest()}>
-              <T>Add backend</T>
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                stripPairingTokenFromUrl();
-                window.location.href = "/";
-              }}
-            >
-              <T>Cancel</T>
-            </Button>
-          </>
-        ) : status === "pairing" ? (
+        {status === "pairing" ? (
           <Button disabled size="sm">
             <T>Pairing...</T>
           </Button>

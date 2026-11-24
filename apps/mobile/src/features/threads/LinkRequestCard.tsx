@@ -44,7 +44,7 @@ import { Sheet } from "../../components/ui/Sheet";
 import { RUNTIME_MODE_CHOICES } from "./thread-settings-options";
 
 /** The same five levels as web's access picker: read-only, then the runtime modes. */
-export const LINK_ACCESS_CHOICES: ReadonlyArray<{
+const ACCESS_CHOICES: ReadonlyArray<{
   readonly access: AuthMcpClientAccess;
   readonly label: string;
   readonly description: string;
@@ -57,7 +57,7 @@ export const LINK_ACCESS_CHOICES: ReadonlyArray<{
   ...RUNTIME_MODE_CHOICES.map((choice) => ({ ...choice, access: choice.mode })),
 ];
 const accessLabel = (access: AuthMcpClientAccess, resolve: MessageResolver) => {
-  const label = LINK_ACCESS_CHOICES.find((choice) => choice.access === access)?.label;
+  const label = ACCESS_CHOICES.find((choice) => choice.access === access)?.label;
   return label === undefined ? access : resolve(label);
 };
 
@@ -437,7 +437,7 @@ function LinkRequestSheet(props: {
               </View>
             )}
             <SettingsSection title={gt("What agents here may do there")}>
-              {LINK_ACCESS_CHOICES.map((choice, index) => (
+              {ACCESS_CHOICES.map((choice, index) => (
                 <SettingsChoiceRow
                   key={choice.access}
                   label={m(choice.label)}

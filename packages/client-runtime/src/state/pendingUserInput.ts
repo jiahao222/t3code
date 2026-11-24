@@ -77,16 +77,17 @@ export function resolvePendingUserInputAnswer(
   }
 
   const selectedOptionValues = normalizeSelectedOptionValues(question, draft?.selectedOptionValues);
-  const fallback =
-    customAnswer ??
-    (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0 ? "" : null);
   if (question.multiSelect) {
-    // Checking nothing answers "none of these" unless the provider requires a choice.
     return selectedOptionValues.length > 0
       ? selectedOptionValues
-      : (fallback ?? (question.required ? null : []));
+      : (customAnswer ??
+          (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0 ? "" : null));
   }
-  return selectedOptionValues[0] ?? fallback;
+  return (
+    selectedOptionValues[0] ??
+    customAnswer ??
+    (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0 ? "" : null)
+  );
 }
 
 export function setPendingUserInputCustomAnswer(

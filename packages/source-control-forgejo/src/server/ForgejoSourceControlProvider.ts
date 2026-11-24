@@ -19,12 +19,7 @@ import {
   type SourceControlCliDiscoverySpec,
   type SourceControlManagedCliDiscoverySpec,
 } from "@t3tools/source-control-core/server/discovery";
-import {
-  parseGitRemoteHost,
-  unknownRemoteProvider,
-} from "@t3tools/source-control-core/shared/definition";
 import { ForgejoPullRequestSchema, toForgejoChangeRequest } from "./forgejoPullRequests.ts";
-import * as ForgejoChangeRequestTemplate from "./forgejoChangeRequestTemplate.ts";
 
 const isForgejoCliError = Schema.is(ForgejoCli.ForgejoCliError);
 
@@ -222,10 +217,8 @@ const refineRepositoryIdentity: NonNullable<
   resolveContext,
 }) {
   const remote = ForgejoCli.parseForgejoRemote(identity.locator.remoteUrl);
-  const remoteHost = parseGitRemoteHost(identity.locator.remoteUrl);
   if (
     !remote ||
-    !remoteHost ||
     !identity.rootPath ||
     (identity.provider !== undefined &&
       identity.provider !== "unknown" &&
@@ -235,7 +228,7 @@ const refineRepositoryIdentity: NonNullable<
   const context = yield* resolveContext({
     cwd: identity.rootPath,
     context: {
-      provider: unknownRemoteProvider(remoteHost),
+      provider: { kind: SourceControlProviderKind.make("unknown"), name: "Unknown", baseUrl: "" },
       remoteName: identity.locator.remoteName,
       remoteUrl: identity.locator.remoteUrl,
     },
@@ -262,11 +255,13 @@ const resolveRemoteWebHost: NonNullable<
   context,
   resolveContext,
 }) {
-  const remoteHost = parseGitRemoteHost(context.remoteUrl);
-  if (!ForgejoCli.parseForgejoRemote(context.remoteUrl)?.ssh || !remoteHost) return null;
+  if (!ForgejoCli.parseForgejoRemote(context.remoteUrl)?.ssh) return null;
   const resolved = yield* resolveContext({
     cwd,
-    context: { ...context, provider: unknownRemoteProvider(remoteHost) },
+    context: {
+      ...context,
+      provider: { kind: SourceControlProviderKind.make("unknown"), name: "Unknown", baseUrl: "" },
+    },
   });
   return resolved?.provider.kind === "forgejo"
     ? new URL(resolved.provider.baseUrl).host.toLowerCase()
@@ -304,7 +299,7 @@ interface UnfilteredPulls {
 export const make = Effect.gen(function* () {
   const cli = yield* ForgejoCli.ForgejoCli;
   const fs = yield* FileSystem.FileSystem;
-  const { git, process } = yield* SourceControlHost.SourceControlHost;
+  const { process } = yield* SourceControlHost.SourceControlHost;
   const request = <S extends Schema.Codec<unknown, unknown, never, never>>(
     input: ForgejoCli.ForgejoApiInput,
     schema: S,
@@ -489,11 +484,6 @@ export const make = Effect.gen(function* () {
       },
       (effect, input) => effect.pipe(mapError("listChangeRequests", input.cwd)),
     ),
-    readChangeRequestTemplate: Effect.fn("ForgejoSourceControlProvider.readChangeRequestTemplate")(
-      function ({ cwd, treeish }) {
-        return ForgejoChangeRequestTemplate.detect(cwd, treeish, git.execute);
-      },
-    ),
     getChangeRequest: Effect.fn("ForgejoSourceControlProvider.getChangeRequest")(function (input) {
       return getPull(input).pipe(
         Effect.map(toForgejoChangeRequest),
@@ -524,18 +514,7 @@ export const make = Effect.gen(function* () {
       function* (input) {
         const repo = yield* cli.resolveRepository(input);
         return cloneUrls(
-          yield* request(
-            { ...input, path: repositoryPath(repo.repository) },
-            RepositorySchema,
-          ).pipe(
-            Effect.mapError((error) => {
-              if (error.reason !== "not-found") return error;
-              return new ForgejoCli.ForgejoCliError({
-                ...error,
-                userFacingDetail: SourceControlProvider.repositoryNotFoundDetail(repo.repository),
-              });
-            }),
-          ),
+          yield* request({ ...input, path: repositoryPath(repo.repository) }, RepositorySchema),
         );
       },
       (effect, input) => effect.pipe(mapError("getRepositoryCloneUrls", input.cwd)),

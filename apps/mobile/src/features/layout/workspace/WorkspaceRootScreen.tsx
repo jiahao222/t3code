@@ -37,12 +37,8 @@ import {
   useWorkspaceTabs,
 } from "./WorkspaceTabsContext";
 import { WorkspaceToolbar } from "./WorkspaceToolbar";
-import {
-  WORKSPACE_DOCK,
-  workspaceDockBottomClearance,
-  workspaceUsesColumns,
-} from "./workspace-tabs-state";
-import { WorkspaceTabDock } from "./WorkspaceTabDock";
+import { WORKSPACE_DOCK, workspaceDockBottomClearance } from "./workspace-tabs-state";
+import { WorkspaceSidebarTabs } from "./WorkspaceSidebarTabs";
 import {
   useCompactWorkspaceTabs,
   useSidebarWorkspaceTabs,
@@ -122,7 +118,7 @@ function WorkspaceRootContent() {
   );
   const tab = state.tabs[settingsOpen ? "settings" : state.selectedTab];
   const bottomClearance =
-    layout.variant === "medium" && !workspaceUsesColumns(state.selectedTab)
+    layout.variant === "medium" && state.selectedTab === "usage"
       ? workspaceDockBottomClearance({ bottomInset: insets.bottom, keyboardHeight })
       : isDuoDevice(deviceType)
         ? // The column's safe area holds the Duo's search toolbar, but not the sidebar's own tab bar.
@@ -169,7 +165,7 @@ function WorkspaceRootContent() {
             // Beside a detail column the tab bar names the tab and the detail header the page,
             // so the sidebar keeps the brand.
             headerTitle:
-              sidebarNavigation || (!settingsOpen && workspaceUsesColumns(state.selectedTab))
+              sidebarNavigation || (!settingsOpen && state.selectedTab !== "usage")
                 ? renderHeaderTitle
                 : undefined,
           }}
@@ -191,10 +187,10 @@ function WorkspaceRootContent() {
           )}
         </SafeAreaInsetsContext>
         {deviceType !== "pad" && deviceType !== "phone" && sidebarPicker ? (
-          <WorkspaceTabDock placement="column" />
+          <WorkspaceSidebarTabs />
         ) : null}
         {enabled.length === 0 && !settingsOpen ? null : settingsOpen ||
-          workspaceUsesColumns(state.selectedTab) ? (
+          state.selectedTab !== "usage" ? (
           <WorkspaceToolbar sidebar={sidebarNavigation} onNewTask={startNewTask} />
         ) : (
           <WorkspaceSectionToolbar onNewTask={startNewTask} showCompose={false} />

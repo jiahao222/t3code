@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Layer, Tracer } from "effect"
+import { Effect, Layer, Tracer } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/http"
 import type { HttpClientError } from "effect/http"
 import { OtlpExporter, OtlpSerialization, OtlpTracer } from "effect/observability"
@@ -8,7 +8,7 @@ import * as Version from "effect/Version"
 const capture = () => {
   const exports: Array<{
     scope: { name: string; version: string }
-    spans: Array<{ traceId: string; links: Array<{ traceId: string }>; status: { code: number } }>
+    spans: Array<{ traceId: string; links: Array<{ traceId: string }> }>
   }> = []
   const httpClient = HttpClient.makeWith(
     Effect.fnUntraced(function*(requestEffect) {
@@ -38,18 +38,6 @@ describe("OtlpTracer", () => {
       yield* Effect.void.pipe(Effect.withSpan("test"))
       yield* (yield* OtlpExporter.Flusher).flush
       assert.deepStrictEqual(exports[0].scope, { name: "effect", version: Version.getCurrentVersion() })
-    }).pipe(Effect.provide(layer))
-  })
-
-  it.effect.each([
-    { name: "success", effect: Effect.void },
-    { name: "failure without errors", effect: Effect.failCause(Cause.empty) }
-  ])("leaves $name status Unset", ({ effect }) => {
-    const { exports, layer } = capture()
-    return Effect.gen(function*() {
-      yield* Effect.exit(effect.pipe(Effect.withSpan("test")))
-      yield* (yield* OtlpExporter.Flusher).flush
-      assert.deepStrictEqual(exports[0].spans[0].status, { code: 0 })
     }).pipe(Effect.provide(layer))
   })
 

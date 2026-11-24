@@ -75,7 +75,6 @@ export default function DocumentPages(props: {
   readonly html: string;
   readonly name: string;
   readonly output?: boolean;
-  readonly estimatedOutputHeight?: number;
   readonly details?: string;
 }) {
   const gt = useGT();
@@ -89,7 +88,7 @@ export default function DocumentPages(props: {
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Theme values invalidate the palette read from the host DOM.
   }, [theme, resolvedTheme, themeHalves]);
   const [zoom, setZoom] = useState(1);
-  const [outputHeight, setOutputHeight] = useState<number>();
+  const [outputHeight, setOutputHeight] = useState(0);
   const stopObserving = useRef<(() => void) | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Disconnect the iframe body's resize observer when the document unmounts.
   useEffect(() => () => stopObserving.current?.(), []);
@@ -136,16 +135,11 @@ export default function DocumentPages(props: {
           stopObserving.current?.();
           const body = event.currentTarget.contentDocument?.body;
           if (!body) return;
-          const measure = () => {
-            const height = Math.ceil(body.getBoundingClientRect().height);
-            if (height > 0) setOutputHeight(height);
-          };
+          const measure = () => setOutputHeight(Math.ceil(body.getBoundingClientRect().height));
           stopObserving.current = observeResize(body, measure);
           measure();
         }}
-        style={
-          props.output ? { height: outputHeight ?? props.estimatedOutputHeight ?? 0 } : undefined
-        }
+        style={props.output ? { height: outputHeight } : undefined}
         className={props.output ? "block w-full border-0" : "min-h-0 flex-1 border-0"}
       />
     </>

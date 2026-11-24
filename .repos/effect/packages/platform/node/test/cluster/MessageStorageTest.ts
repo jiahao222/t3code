@@ -5,7 +5,6 @@ import {
   EntityId,
   EntityType,
   Envelope,
-  MachineId,
   Message,
   MessageStorage,
   Reply,
@@ -103,8 +102,7 @@ export const makeRequest = Effect.fnUntraced(function*(options?: {
   readonly rpc?: Rpc.AnyWithProps
   readonly payload?: any
   readonly entityId?: string
-  readonly entityType?: string | undefined
-  readonly shardId?: ShardId.ShardId | undefined
+  readonly shardId?: ShardId.ShardId
 }) {
   const snowflake = yield* Snowflake.Generator
   const rpc = options?.rpc ?? GetUserRpc
@@ -113,7 +111,7 @@ export const makeRequest = Effect.fnUntraced(function*(options?: {
       requestId: snowflake.nextUnsafe(),
       address: EntityAddress.make({
         shardId: options?.shardId ?? ShardId.make("default", 1),
-        entityType: EntityType.make(options?.entityType ?? "test"),
+        entityType: EntityType.make("test"),
         entityId: EntityId.make(options?.entityId ?? "1")
       }),
       tag: rpc._tag,
@@ -155,14 +153,11 @@ export class StreamRpc extends Rpc.make("StreamTest", {
   primaryKey: (value) => value.id.toString()
 }) {}
 
-// `completedAt` sets the reply id's timestamp, which storage treats as the completion time.
-export const makeReply = Effect.fnUntraced(function*(request: Message.OutgoingRequest<any>, completedAt?: number) {
+export const makeReply = Effect.fnUntraced(function*(request: Message.OutgoingRequest<any>) {
   const snowflake = yield* Snowflake.Generator
   return new Reply.ReplyWithContext({
     reply: new Reply.WithExit({
-      id: completedAt === undefined
-        ? snowflake.nextUnsafe()
-        : Snowflake.make({ timestamp: completedAt, machineId: MachineId.make(0), sequence: 0 }),
+      id: snowflake.nextUnsafe(),
       requestId: request.envelope.requestId,
       exit: Exit.void as any
     }),

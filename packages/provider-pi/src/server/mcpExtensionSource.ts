@@ -430,11 +430,8 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
         pi.registerTool({
           name: toolName,
           label: name,
-          // Pi records active declarations in the transcript even when hidden, and
-          // estimates context from them. The model sees only the public schema;
-          // T3's server still validates the arguments.
-          description: isAlias ? "Same as mcp__t3-code__" + name + "." : (tool.description ?? name),
-          parameters: jsonSchemaToTypebox(isAlias ? { type: "object" } : tool.inputSchema),
+          description: tool.description ?? name,
+          parameters: jsonSchemaToTypebox(tool.inputSchema),
           ...(supportsExposure ? { outputSchema: mcpOutputSchema(tool) } : {}),
           ...(supportsExposure ? { exposure } : {}),
           ...(isAlias ? { prepareLoadout: () => ({ hiddenDeclarations: [toolName] }) } : {}),
@@ -505,36 +502,16 @@ export default async function t3McpExtension(pi: ExtensionAPI) {
     const current = pi.getActiveTools();
     const missing = required.filter((name) => !current.includes(name));
     if (missing.length > 0) pi.setActiveTools([...current, ...missing]);
-    // An alias is callable only while active, and Pi records every active
-    // declaration in the transcript, hidden or not. Calls to the alias of an
-    // active public tool are renamed at message_end instead.
+    // An alias is callable only while active.
     const registered = new Set(pi.getAllTools().map((tool) => tool.name));
     const loaded = pi.getActiveTools();
     const aliases = catalog
-      .filter((tool) => registered.has(ALIAS_PREFIX + tool.name) &&
-        followsPublicTool(tool.name, registered, loaded) &&
-        !loaded.includes("mcp__t3-code__" + tool.name))
+      .filter((tool) => registered.has(ALIAS_PREFIX + tool.name) && followsPublicTool(tool.name, registered, loaded))
       .map((tool) => ALIAS_PREFIX + tool.name);
     const kept = loaded.filter((name) => !name.startsWith(ALIAS_PREFIX) || aliases.includes(name));
     const added = aliases.filter((name) => !loaded.includes(name));
     if (added.length > 0 || kept.length !== loaded.length) pi.setActiveTools([...kept, ...added]);
   };
-
-  // Pi runs a message's tool calls after message_end handlers replace it.
-  pi.on("message_end", (event) => {
-    const message = event.message;
-    if (!supportsExposure || message.role !== "assistant" || !Array.isArray(message.content)) return undefined;
-    const active = pi.getActiveTools();
-    let renamed = false;
-    const content = message.content.map((part) => {
-      if (part.type !== "toolCall" || !part.name.startsWith(ALIAS_PREFIX)) return part;
-      const publicName = "mcp__t3-code__" + part.name.slice(ALIAS_PREFIX.length);
-      if (!active.includes(publicName)) return part;
-      renamed = true;
-      return { ...part, name: publicName };
-    });
-    return renamed ? { message: { ...message, content } } : undefined;
-  });
 
   // Tree navigation restores its saved loadout after session_start.
   pi.on("session_tree", (_event, ctx) => reconcileDiscovery(ctx));

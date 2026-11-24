@@ -52,21 +52,7 @@ const readLines = Effect.gen(function*() {
 
 const unused = Effect.gen(function*() {
   yield* Terminal.Terminal
-  return ioReads
-})
-
-const output = Effect.gen(function*() {
-  const terminal = yield* Terminal.Terminal
-  yield* terminal.display("")
-  yield* terminal.columns
-  yield* terminal.rows
-  yield* Effect.scoped(terminal.size)
-  // Read when the result is printed, after the layer has been released.
-  return {
-    get stdin() {
-      return ioReads.stdin
-    }
-  }
+  return { dataListeners: process.stdin.listenerCount("data") }
 })
 
 const readLineAfterEnd = Effect.gen(function*() {
@@ -120,19 +106,6 @@ const ttyReadInput = Effect.gen(function*() {
 })
 
 const mode = process.argv[2]
-const ioReads = { stdin: 0, stdout: 0 }
-if (mode === "unused" || mode === "output") {
-  for (const name of ["stdin", "stdout"] as const) {
-    const descriptor = Object.getOwnPropertyDescriptor(process, name)!
-    Object.defineProperty(process, name, {
-      ...descriptor,
-      get() {
-        ioReads[name]++
-        return descriptor.get!.call(process)
-      }
-    })
-  }
-}
 const select = Prompt.run(Prompt.Select({
   message: "Pick fruit",
   choices: [
@@ -165,8 +138,6 @@ const program = Effect.gen(function*() {
     return yield* readLines
   } else if (mode === "unused") {
     return yield* unused
-  } else if (mode === "output") {
-    return yield* output
   } else if (mode === "read-line-after-end") {
     return yield* readLineAfterEnd
   } else if (mode === "read-line-disposed") {

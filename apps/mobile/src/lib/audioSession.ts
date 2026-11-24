@@ -62,17 +62,14 @@ export function isAudioSessionOwner(token: AudioSessionToken): boolean {
 
 export function activateAudioSession(
   token: AudioSessionToken,
-  options: { readonly nativePlayback?: boolean; readonly allowBluetoothRecording?: boolean } = {},
+  nativePlayback = false,
 ): Promise<boolean> {
   return enqueue(async () => {
     if (!isAudioSessionOwner(token)) return false;
     // Video configures and activates its own native session, including moviePlayback on iOS.
-    if (options.nativePlayback) return true;
+    if (nativePlayback) return true;
     await setAudioModeAsync({
       allowsRecording: token.kind === "recording",
-      ...(token.kind === "recording" && options.allowBluetoothRecording === false
-        ? { allowBluetoothRecording: false }
-        : {}),
       interruptionMode: "doNotMix",
       playsInSilentMode: true,
       shouldPlayInBackground: false,
@@ -144,7 +141,7 @@ export function createAudioPlaybackSession(
       if (!current) return;
       try {
         await prepare?.();
-        if (!(await activateAudioSession(current, { nativePlayback }))) return;
+        if (!(await activateAudioSession(current, nativePlayback))) return;
         if (token !== current || !isAudioSessionOwner(current)) return;
         player.play();
       } catch (error) {

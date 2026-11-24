@@ -5,8 +5,6 @@
  * fields that are shared by all variants or specific to some variants. From
  * those definitions it can create schema classes, unions, extracted struct
  * schemas, and helpers for changing fields across variants.
- * Field definitions use own enumerable string and symbol properties.
- * Non-enumerable and inherited definitions are ignored.
  *
  * @stability unstable
  * @since 4.0.0
@@ -86,7 +84,7 @@ export declare namespace Struct {
    * @since 4.0.0
    */
   export type Fields = {
-    readonly [key: PropertyKey]:
+    readonly [key: string]:
       | Schema.Top
       | Field<any>
       | Struct<any>
@@ -179,7 +177,7 @@ export declare namespace Field {
    * @since 4.0.0
    */
   export type Fields = {
-    readonly [key: PropertyKey]:
+    readonly [key: string]:
       | Schema.Top
       | Field<any>
       | Struct<any>
@@ -249,8 +247,8 @@ const extract: {
     if (Object.hasOwn(cache, variant)) {
       return cache[variant] as any
     }
-    const fields: Record<PropertyKey, any> = {}
-    for (const key of InternalRecord.ownEnumerableKeys(self[TypeId])) {
+    const fields: Record<string, any> = {}
+    for (const key of Object.keys(self[TypeId])) {
       const value = self[TypeId][key]
       if (value === undefined) {
         continue
@@ -422,12 +420,6 @@ export declare namespace Union {
 /**
  * Creates a variant schema toolkit for a fixed set of variant names and a default
  * variant.
- *
- * **Details**
- *
- * The returned `Struct`, `Class`, and `extract` helpers discover field definitions
- * from own enumerable string and symbol properties, including in nested structs.
- * Non-enumerable and inherited definitions are ignored. Variant names are strings.
  *
  * @stability unstable
  * @category constructors

@@ -167,14 +167,6 @@ const evaluateAt = <T>(
  * Use when you need to transform a parsed config value with a function that
  * cannot fail.
  *
- * **Gotchas**
- *
- * A function that throws, such as a brand constructor with checks, produces a
- * defect rather than a `ConfigError`. Validate in the schema passed to
- * {@link schema} instead, where `Schema.fromBrand` applies the constructor's
- * checks. For other fallible transformations, use {@link mapEffect} and fail
- * with a `ConfigError`.
- *
  * **Example** (Uppercasing a string config)
  *
  * ```ts import.meta.vitest
@@ -189,7 +181,6 @@ const evaluateAt = <T>(
  * ```
  *
  * @see {@link mapEffect} – when the transformation can fail
- * @see {@link schema} – when a schema can validate the value
  *
  * @stability stable
  * @category mapping
@@ -394,8 +385,6 @@ export const orElse: {
  *
  * Accepts a tuple (preserves positions), an iterable, or a record of configs.
  * Returns a config whose parsed value mirrors the input shape.
- * Record inputs use own enumerable string and symbol properties.
- * Non-enumerable and inherited properties are ignored.
  *
  * A combined config is absent when any child is absent and no child fails.
  * Validation and source errors propagate even when another child is absent.
@@ -428,19 +417,19 @@ export const orElse: {
  * @category combinators
  * @since 2.0.0
  */
-export function all<const Arg extends Iterable<Config<any>> | Record<PropertyKey, Config<any>>>(
+export function all<const Arg extends Iterable<Config<any>> | Record<string, Config<any>>>(
   arg: Arg
 ): Config<
   [Arg] extends [ReadonlyArray<Config<any>>] ? {
       -readonly [K in keyof Arg]: [Arg[K]] extends [Config<infer A>] ? A : never
     }
     : [Arg] extends [Iterable<Config<infer A>>] ? Array<A>
-    : [Arg] extends [Record<PropertyKey, Config<any>>] ? {
+    : [Arg] extends [Record<string, Config<any>>] ? {
         -readonly [K in keyof Arg]: [Arg[K]] extends [Config<infer A>] ? A : never
       }
     : never
 > {
-  const configs: Array<Config<any>> | Record<PropertyKey, Config<any>> = globalThis.Array.isArray(arg)
+  const configs: Array<Config<any>> | Record<string, Config<any>> = globalThis.Array.isArray(arg)
     ? arg
     : Symbol.iterator in arg
     ? [...arg as any]
@@ -452,9 +441,7 @@ export function all<const Arg extends Iterable<Config<any>> | Record<PropertyKey
         Result.all
       )
       : Effect.mapEager(
-        Effect.all(Object.fromEntries(
-          InternalRecord.ownEnumerableKeys(configs).map((key) => [key, evaluateAt(configs[key], provider, pathPrefix)])
-        )),
+        Effect.all(Rec.map(configs, (config) => evaluateAt(config, provider, pathPrefix))),
         Result.all
       )
   ) as any

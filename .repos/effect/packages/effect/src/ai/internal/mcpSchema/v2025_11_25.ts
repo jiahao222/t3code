@@ -3,6 +3,8 @@
  *
  * This module is a dated delta from v2025-06-18. Experimental Tasks are not
  * part of the supported vocabulary for this adapter.
+ *
+ * @internal
  */
 import * as Rpc from "../../../rpc/Rpc.ts"
 import * as RpcGroup from "../../../rpc/RpcGroup.ts"

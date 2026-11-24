@@ -260,7 +260,7 @@ describe("Muse history discovery", () => {
       expect(create).not.toHaveBeenCalled();
     }).pipe(
       Effect.provide([NodeServices.layer, MuseUsageHome.layer]),
-      Effect.provideService(SpawnExecutableResolution, async () => undefined),
+      Effect.provideService(SpawnExecutableResolution, () => undefined),
     ),
   );
 

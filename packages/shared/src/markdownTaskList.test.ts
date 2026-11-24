@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { markdownTaskMarkerOffset } from "./markdownTaskList.ts";
-import { setMarkdownTaskChecked } from "./markdownTaskEdits.ts";
+import { markdownTaskMarkerOffset, setMarkdownTaskChecked } from "./markdownTaskList.ts";
 
 describe("setMarkdownTaskChecked", () => {
   const markdown = "- [ ] First\n- [x] Second\n";

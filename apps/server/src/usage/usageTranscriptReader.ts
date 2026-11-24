@@ -36,8 +36,8 @@ export interface TranscriptParseResult {
   readonly records: readonly UsageRecord[];
   /** Unterminated tail records stay outside records/position so the next scan rereads them. */
   readonly tailRecords: readonly UsageRecord[];
-  /** Timestamps, including tentative tail diagnostics; position.state only includes committed lines. */
-  readonly malformedRecords: readonly number[];
+  /** Includes tentative tail diagnostics; position.state only includes committed lines. */
+  readonly malformedRecords: number;
   readonly position: TranscriptParsePosition;
   readonly resumed: boolean;
 }
@@ -324,10 +324,16 @@ async function* readChunks(
   }
 }
 
-// Match ASCII markers as raw bytes: UTF-8 cannot false-match them mid-sequence, and no line string is allocated.
+// Match markers in one latin1 alternation; one character per byte preserves exact ASCII offsets.
 export function transcriptLineGate(markers: readonly [string, ...string[]]) {
-  const needles = markers.map((marker) => Buffer.from(marker));
-  return (line: Buffer) => needles.some((needle) => line.includes(needle));
+  if (markers.length === 1) {
+    const marker = Buffer.from(markers[0]);
+    return (line: Buffer) => line.includes(marker);
+  }
+  const pattern = new RegExp(
+    markers.map((marker) => marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+  );
+  return (line: Buffer) => pattern.test(line.toString("latin1"));
 }
 
 /** Returns null on read failure; caching it as empty would hide usage until size/mtime changes. */
@@ -464,7 +470,7 @@ export async function readTranscriptRecords<State>(
     return {
       records,
       tailRecords,
-      malformedRecords: format.readMalformedRecords?.(tailState) ?? [],
+      malformedRecords: format.readMalformedRecords?.(tailState) ?? 0,
       position: {
         resumeOffset: compressed ? 0 : resumeOffset,
         guardLength,

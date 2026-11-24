@@ -2,8 +2,7 @@ import { T, useGT } from "gt-react-native";
 import { SheetHeader } from "../../../components/ui/SheetHeader";
 import { useNavigation } from "@react-navigation/native";
 import { useState } from "react";
-import { Pressable, View } from "react-native";
-import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
+import { Linking, Pressable, View } from "react-native";
 import { WebView } from "react-native-webview";
 
 import { Button } from "../../../components/ui/Button";
@@ -39,14 +38,14 @@ export function SettingsLegalDocumentRouteScreen({
         {
           accessibilityLabel: gt("Open legal documents in external browser"),
           icon: "safari",
-          onPress: () => void tryOpenExternalUrl(safeExternalUrl),
+          onPress: () => void Linking.openURL(safeExternalUrl).catch(() => undefined),
         },
       ]}
     />
   );
 
   const openExternalUrl = (url: string) => {
-    void tryOpenExternalUrl(url);
+    void Linking.openURL(url).catch(() => undefined);
   };
   if (loadError) {
     return (

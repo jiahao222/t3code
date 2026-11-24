@@ -32,8 +32,7 @@ export const toSocket = (
             conn.destroy()
           }
         })
-    ),
-    { disableReconnects: true }
+    )
   )
 
 const openError = (cause: unknown) =>

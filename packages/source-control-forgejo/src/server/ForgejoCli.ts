@@ -27,7 +27,6 @@ export class ForgejoCliError extends Schema.TaggedError<ForgejoCliError>()("Forg
   command: Schema.Literals(["fj", "tea"]),
   cwd: Schema.String,
   detail: Schema.String,
-  userFacingDetail: Schema.optional(Schema.String),
   reason: Schema.optional(
     Schema.Literals([
       "missing-cli",
@@ -593,14 +592,7 @@ export const make = Effect.gen(function* () {
         ssh: false,
         path: remote?.path ?? "",
       };
-    // A reference or repository URL names the host; the project's own remote decides the scheme.
-    const callerNamedRemote =
-      referenceRemote ?? (input.repository ? parseForgejoRemote(input.repository) : null);
-    const schemeSource = callerNamedRemote ? input.context?.remoteUrl : remoteUrl;
-    const schemeRemoteUrl =
-      schemeSource && parseForgejoRemote(schemeSource)?.ssh
-        ? input.context?.provider.baseUrl
-        : schemeSource;
+    const schemeRemoteUrl = remote?.ssh ? input.context?.provider.baseUrl : remoteUrl;
     const fjLogins = yield* listLogins({
       cwd: input.cwd,
       command: "fj",

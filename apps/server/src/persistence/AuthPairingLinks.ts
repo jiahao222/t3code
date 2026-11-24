@@ -98,14 +98,10 @@ export const FindPendingConnectPairingLinkInput = Schema.Struct({
 });
 export type FindPendingConnectPairingLinkInput = typeof FindPendingConnectPairingLinkInput.Type;
 
-/**
- * Unspent links bound to `proofKeyThumbprint`, or with `keepProofKeyThumbprint` every other bound
- * one. `includeUnbound` adds the links no key is bound to: pairing and approval codes.
- */
+/** Unspent links bound to `proofKeyThumbprint`, or with `keepProofKeyThumbprint` every other bound one. */
 export const RevokeUnspentByProofKeyInput = Schema.Struct({
   proofKeyThumbprint: Schema.NullOr(Schema.String),
   keepProofKeyThumbprint: Schema.NullOr(Schema.String),
-  includeUnbound: Schema.Boolean,
   revokedAt: Schema.DateTimeUtcFromString,
 });
 export type RevokeUnspentByProofKeyInput = typeof RevokeUnspentByProofKeyInput.Type;
@@ -491,21 +487,16 @@ export const make = Effect.gen(function* () {
   const revokeUnspentByProofKeyRows = SqlSchema.findAll({
     Request: RevokeUnspentByProofKeyInput,
     Result: Schema.Struct({ id: Schema.String }),
-    execute: ({ proofKeyThumbprint, keepProofKeyThumbprint, includeUnbound, revokedAt }) =>
+    execute: ({ proofKeyThumbprint, keepProofKeyThumbprint, revokedAt }) =>
       sql`
-        -- Only T3 Connect mints bind a proof key, so bound links are that key's connect credentials.
+        -- Only T3 Connect mints bind a proof key, so these are that key's connect credentials.
         UPDATE auth_pairing_links
         SET revoked_at = ${revokedAt}
-        WHERE revoked_at IS NULL
+        WHERE proof_key_thumbprint IS NOT NULL
+          AND revoked_at IS NULL
           AND consumed_at IS NULL
-          AND (
-            (
-              proof_key_thumbprint IS NOT NULL
-              AND (${proofKeyThumbprint} IS NULL OR proof_key_thumbprint = ${proofKeyThumbprint})
-              AND proof_key_thumbprint IS NOT ${keepProofKeyThumbprint}
-            )
-            OR (proof_key_thumbprint IS NULL AND ${includeUnbound ? 1 : 0} = 1)
-          )
+          AND (${proofKeyThumbprint} IS NULL OR proof_key_thumbprint = ${proofKeyThumbprint})
+          AND proof_key_thumbprint IS NOT ${keepProofKeyThumbprint}
         RETURNING id AS "id"
       `,
   });

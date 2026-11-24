@@ -197,8 +197,7 @@ export function ProviderInstanceIcon(props: {
               borderRadius: 999,
               borderWidth: 1,
               ...(props.surfaceColor ? { borderColor: props.surfaceColor } : {}),
-              // An undefined inline key still overrides the className color when styles merge.
-              ...(accentColor ? { backgroundColor: accentColor } : {}),
+              backgroundColor: accentColor,
               alignItems: "center",
               justifyContent: "center",
             }}
@@ -209,7 +208,7 @@ export function ProviderInstanceIcon(props: {
                 fontSize: 7,
                 fontWeight: "600",
                 lineHeight: 9,
-                ...(accentColor ? { color: providerAccentForegroundColor(accentColor) } : {}),
+                color: accentColor ? providerAccentForegroundColor(accentColor) : undefined,
               }}
             >
               {providerInstanceInitials(props.displayName)}

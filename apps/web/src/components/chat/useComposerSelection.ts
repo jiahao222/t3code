@@ -14,6 +14,7 @@ import {
   RuntimeMode,
 } from "@t3tools/contracts";
 import type { deriveThreadStructureRuntime } from "@t3tools/client-runtime/state/thread-execution";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type SetStateAction } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toastManager } from "../ui/toast";
@@ -24,12 +25,10 @@ import {
   threadHasStarted,
 } from "../../lib/chatThreadActions";
 import {
-  composerTargetKey,
   type DraftThreadEnvMode,
   isSameModel,
   useComposerDraftStore,
 } from "../../composerDraftStore";
-import { cancelHeldComposerSend } from "./preparingComposerImages";
 import {
   getStartedThreadModelChangeBlockReason,
   deriveLockedProvider,
@@ -97,7 +96,6 @@ export function useComposerSelection(input: ComposerSelectionInput) {
 
   const handleRuntimeModeChange = (mode: RuntimeMode) => {
     if (mode === runtimeMode) return;
-    cancelHeldComposerSend(composerTargetKey(composerDraftTarget));
     setComposerDraftRuntimeMode(composerDraftTarget, mode);
     if (isLocalDraftThread) {
       setDraftThreadContext(composerDraftTarget, { runtimeMode: mode });
@@ -137,7 +135,6 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     options?: { focusComposer?: boolean },
   ) => {
     if (!activeThread) return;
-    cancelHeldComposerSend(composerTargetKey(composerDraftTarget));
     const entry = providerStatuses.find((snapshot) => snapshot.instanceId === instanceId);
     const resolvedDriverKind = entry?.driver ?? null;
     if (
@@ -174,7 +171,8 @@ export function useComposerSelection(input: ComposerSelectionInput) {
       model,
       { preserveUnavailableSelection: true },
     );
-    const storedDraft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
+    const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    const storedDraft = useComposerDraftStore.getState().getComposerDraft(threadRef);
     const draft = draftModelSelectionApplies(storedDraft, threadHasStarted(activeThread))
       ? storedDraft
       : null;
@@ -191,7 +189,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
         shownSelection.model === resolvedModel)
     ) {
       // Re-picking the shown model keeps its options and saves it again if that save failed.
-      if (resolvedModel && !isLocalDraftThread) applyThreadModelPick(composerDraftTarget);
+      if (resolvedModel && !isLocalDraftThread) applyThreadModelPick(threadRef);
       if (options?.focusComposer !== false) scheduleComposerFocus();
       return;
     }
@@ -231,18 +229,17 @@ export function useComposerSelection(input: ComposerSelectionInput) {
       if (options?.focusComposer !== false) scheduleComposerFocus();
       return;
     }
-    setComposerDraftModelSelection(composerDraftTarget, nextModelSelection, {
+    setComposerDraftModelSelection(threadRef, nextModelSelection, {
       explicit: true,
       replaceOptions: true,
     });
     setStickyComposerModelSelection(nextModelSelection);
-    if (!isLocalDraftThread) applyThreadModelPick(composerDraftTarget);
+    if (!isLocalDraftThread) applyThreadModelPick(threadRef);
     if (options?.focusComposer !== false) scheduleComposerFocus();
   };
   const onProviderModelSelectStable = useStableCallback(onProviderModelSelect);
   const onEnvModeChange = (mode: DraftThreadEnvMode) => {
     if (multipleModelSelections !== null) return;
-    cancelHeldComposerSend(composerTargetKey(composerDraftTarget));
     if (canOverrideServerThreadEnvMode) {
       if (activeThread) setPendingServerThreadEnvModeEntry({ threadId: activeThread.id, mode });
       scheduleComposerFocus();
@@ -266,7 +263,6 @@ export function useComposerSelection(input: ComposerSelectionInput) {
   // re-renders the branch toolbar and thread details panel with it.
   const activeThreadId = activeThread?.id;
   const onStartFromOriginChange = (nextStartFromOrigin: boolean) => {
-    cancelHeldComposerSend(composerTargetKey(composerDraftTarget));
     if (canOverrideServerThreadEnvMode && activeThreadId !== undefined) {
       setPendingServerThreadStartFromOriginByThreadId((current) =>
         current[activeThreadId] === nextStartFromOrigin

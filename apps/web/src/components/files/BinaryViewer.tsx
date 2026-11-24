@@ -1,5 +1,9 @@
 /* oxlint-disable react/no-array-index-key -- Read-only cells retain their database row and column positions. */
-import { decodeFilePreviewText, filePreviewKind } from "@t3tools/shared/filePreview";
+import {
+  decodeFilePreviewText,
+  filePreviewKind,
+  hostPreviewMimeTypeFromExtension,
+} from "@t3tools/shared/filePreview";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { ChevronLeftIcon, ChevronRightIcon, FileIcon, FolderIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
@@ -25,7 +29,6 @@ import {
   type BinaryWorkerRequest,
   type BinaryWorkerResult,
 } from "./binaryPreviewProtocol";
-import { archiveImageUrl } from "./archiveImageUrl";
 import { PreviewImage } from "./PreviewImage";
 import { readBinaryPreview } from "./readBinaryPreview";
 import { previewErrorText, previewFailureText } from "./previewFailureMessages";
@@ -66,10 +69,15 @@ function ArchiveFile(props: { readonly path: string; readonly bytes: Uint8Array<
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Create an object URL for the extracted image and revoke it when the entry changes or unmounts.
   useEffect(() => {
     if (kind !== "image") return;
-    const image = archiveImageUrl(props.path, props.bytes);
+    const extension = props.path.slice(props.path.lastIndexOf("."));
+    const objectUrl = URL.createObjectURL(
+      new Blob([props.bytes], {
+        type: hostPreviewMimeTypeFromExtension(extension) ?? "application/octet-stream",
+      }),
+    );
     // oxlint-disable-next-line react/set-state-in-effect -- Publish a Blob URL only after registering its cleanup.
-    setUrl(image.url);
-    return image.revoke;
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
   }, [props.bytes, props.path, kind]);
   if (kind === "image")
     return url ? <PreviewImage key={url} src={url} name={props.path} /> : <FileSurfaceLoading />;
@@ -194,28 +202,19 @@ export default function BinaryViewer(props: {
   };
   const children = new Map<
     string,
-    { path: string; entryPath: string; directory: boolean; size: number; modified: string | null }
+    { path: string; directory: boolean; size: number; modified: string | null }
   >();
   for (const item of archive?.entries ?? []) {
-    const name = item.path.replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/");
-    if (!name.startsWith(folder)) continue;
-    const rest = name.slice(folder.length);
+    if (!item.path.startsWith(folder)) continue;
+    const rest = item.path.slice(folder.length).replace(/\/$/, "");
     if (!rest) continue;
     const slash = rest.indexOf("/");
-    const path = slash < 0 ? name : `${folder}${rest.slice(0, slash)}`;
+    const path = slash < 0 ? item.path.replace(/\/$/, "") : `${folder}${rest.slice(0, slash)}`;
     const directory = slash >= 0 || item.directory;
-    // Files stay keyed by their raw name so `/a.txt` and `a.txt` remain two openable rows.
-    const key = directory ? `d:${path}` : `f:${item.path}`;
+    const key = `${path}${directory ? "/" : ""}`;
     const previous = children.get(key);
-    if (previous && directory) previous.size += item.size;
-    else
-      children.set(key, {
-        path,
-        entryPath: item.path,
-        directory,
-        size: item.size,
-        modified: item.modified,
-      });
+    if (previous) previous.size += item.size;
+    else children.set(key, { path, directory, size: item.size, modified: item.modified });
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -348,7 +347,7 @@ export default function BinaryViewer(props: {
                 )
                 .map((item) => (
                   <tr
-                    key={item.directory ? `d:${item.path}` : `f:${item.entryPath}`}
+                    key={`${item.path}${item.directory ? "/" : ""}`}
                     className="hover:bg-muted/40"
                   >
                     <td className="max-w-0 border-b border-border/60">
@@ -360,7 +359,7 @@ export default function BinaryViewer(props: {
                           else {
                             setSelectedPath(item.path);
                             setEntry(null);
-                            send({ type: "entry", path: item.entryPath });
+                            send({ type: "entry", path: item.path });
                           }
                         }}
                       >

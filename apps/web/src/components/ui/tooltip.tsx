@@ -21,13 +21,13 @@ type TooltipActionsRef = RefObject<TooltipPrimitive.Root.Actions | null>;
 
 // The compiler freezes context values; update hovered tooltips through calls instead of shared ref writes.
 function createTooltipHoverTracker() {
-  let hovered: { trigger: HTMLElement; owner: object; close: () => void } | null = null;
+  let hovered: { trigger: HTMLElement; actionsRef: TooltipActionsRef } | null = null;
   return {
-    hover(trigger: HTMLElement, owner: object, close: () => void) {
-      hovered = { trigger, owner, close };
+    hover(trigger: HTMLElement, actionsRef: TooltipActionsRef) {
+      hovered = { trigger, actionsRef };
     },
-    release(owner: object) {
-      if (hovered?.owner === owner) hovered = null;
+    release(actionsRef: TooltipActionsRef) {
+      if (hovered?.actionsRef === actionsRef) hovered = null;
     },
     dismissUnfocused() {
       const tooltip = hovered;
@@ -37,7 +37,8 @@ function createTooltipHoverTracker() {
         return;
       }
       hovered = null;
-      tooltip.close();
+      // Base UI also cancels delayed hover opens through this action.
+      tooltip.actionsRef.current?.close();
     },
   };
 }
@@ -95,8 +96,7 @@ function TooltipTrigger(props: TooltipPrimitive.Trigger.Props) {
       {...props}
       onMouseEnter={(event) => {
         props.onMouseEnter?.(event);
-        // Base UI also cancels delayed hover opens through this action.
-        tracker.hover(event.currentTarget, actionsRef, () => actionsRef.current?.close());
+        tracker.hover(event.currentTarget, actionsRef);
       }}
     />
   );
@@ -161,14 +161,4 @@ function TooltipPopup({
   );
 }
 
-/** The enclosing TooltipScrollDismissArea's tracker, for triggers that bypass TooltipTrigger. */
-const useTooltipScrollTracker = () => use(TooltipScrollContext);
-
-export {
-  TooltipProvider,
-  Tooltip,
-  TooltipTrigger,
-  TooltipPopup,
-  TooltipScrollDismissArea,
-  useTooltipScrollTracker,
-};
+export { TooltipProvider, Tooltip, TooltipTrigger, TooltipPopup, TooltipScrollDismissArea };

@@ -7,7 +7,6 @@ import {
   composerMathRanges,
   type ComposerInlineToken,
 } from "@t3tools/shared/composerInlineTokens";
-import { markdownMathRanges } from "~/markdown/wordsHast";
 
 export type ComposerPromptSegment =
   | {
@@ -90,7 +89,7 @@ function collectModelTokens(text: string, inlineTokens: ReadonlyArray<ComposerIn
     /\s/.test(text[mention.end] ?? ""),
   );
   if (mentions.length === 0) return [];
-  const taken = [...inlineTokens, ...composerMathRanges(text, markdownMathRanges)];
+  const taken = [...inlineTokens, ...composerMathRanges(text)];
   return mentions
     .filter(
       (mention) => !taken.some((range) => mention.start < range.end && mention.end > range.start),
@@ -99,7 +98,7 @@ function collectModelTokens(text: string, inlineTokens: ReadonlyArray<ComposerIn
 }
 
 export function collectComposerPromptInlineTokens(text: string) {
-  const inlineTokens = collectComposerInlineTokens(text, { findMath: markdownMathRanges });
+  const inlineTokens = collectComposerInlineTokens(text);
   const models = collectModelTokens(text, inlineTokens);
   const tokens =
     models.length === 0

@@ -1,22 +1,16 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-// Our forks ship as tarballs in apps/mobile/deps and apps/web/deps. A pnpm patch on one is a
-// second source of truth that the next tarball silently drops, so changes go to the fork (see
-// the README beside each tarball).
-const FORK_APPS = ["apps/mobile", "apps/web"];
-
+// Our forks ship as tarballs in apps/mobile/deps. A pnpm patch on one is a second source of
+// truth that the next tarball silently drops, so changes go to the fork (apps/mobile/deps/README.md).
 function forkTarballPatches(patchedDependencies) {
-  if (!patchedDependencies) return [];
-  const forks = FORK_APPS.flatMap((app) => {
-    const manifestPath = path.join(__dirname, app, "package.json");
-    // Release staging installs a partial workspace without every app.
-    if (!fs.existsSync(manifestPath)) return [];
-    const { dependencies = {} } = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    return Object.keys(dependencies).filter((name) =>
-      String(dependencies[name]).startsWith("file:deps/"),
-    );
-  });
+  const manifestPath = path.join(__dirname, "apps/mobile/package.json");
+  // Release staging installs a partial workspace without the mobile app.
+  if (!patchedDependencies || !fs.existsSync(manifestPath)) return [];
+  const { dependencies = {} } = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const forks = Object.keys(dependencies).filter((name) =>
+    String(dependencies[name]).startsWith("file:deps/"),
+  );
   return Object.keys(patchedDependencies).filter((key) =>
     forks.some((name) => key === name || key.startsWith(`${name}@`)),
   );
@@ -29,7 +23,7 @@ module.exports = {
       if (forkPatches.length > 0) {
         throw new Error(
           `pnpm-workspace.yaml patches ${forkPatches.join(", ")}, which ships as a fork tarball in ` +
-            "an app's deps directory. Change the fork and replace the tarball instead (deps/README.md).",
+            "apps/mobile/deps. Change the fork and replace the tarball instead (apps/mobile/deps/README.md).",
         );
       }
       // Windows installs need Linux x64 glibc binaries because WSL shares node_modules.

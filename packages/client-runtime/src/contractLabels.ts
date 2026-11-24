@@ -129,8 +129,7 @@ export type ManagedCapability =
   | "remoteClients"
   | "connect"
   | "webhookTasks"
-  | "browserCookieImport"
-  | "previewTunnel";
+  | "browserCookieImport";
 
 function managedCapabilityDeniedMessage(
   organization: string,
@@ -155,13 +154,6 @@ function managedCapabilityDeniedMessage(
         msg("{organization}'s policy does not allow importing browser cookies.", {
           organization,
         }),
-      );
-    case "previewTunnel":
-      return resolve(
-        msg(
-          "{organization}'s policy does not allow opening this machine's local servers on other devices.",
-          { organization },
-        ),
       );
   }
 }
@@ -281,14 +273,6 @@ const INSTALL_HINTS = [
       install: "`bun install -g @gitcafe/cli`",
       login: "`cafe auth login --host https://git.cafe/api`",
       variable: "CAFE_TOKEN",
-    },
-  ),
-  msg(
-    "Install the TanStack Source CLI with {install}, then run {login}, save a token in Settings, or set {variable} on the server.",
-    {
-      install: "`curl -fsSL https://source.tanstack.com/install | sh`",
-      login: "`src auth login --web --hostname source.tanstack.com`",
-      variable: "SRC_TOKEN",
     },
   ),
 ];

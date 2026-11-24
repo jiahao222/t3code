@@ -8,10 +8,7 @@ const checkout = vi.hoisted(() => ({
   branches: [] as Array<{ name: string; worktreePath: string | null }>,
 }));
 
-vi.mock("@react-navigation/native", () => ({
-  useFocusEffect: () => {},
-  useNavigation: () => ({}),
-}));
+vi.mock("@react-navigation/native", () => ({ useNavigation: () => ({}) }));
 vi.mock("../../../components/ui/SheetHeader", () => ({ SheetHeader: () => null }));
 vi.mock("../../../components/ui/FitSheet", () => ({
   FitSheet: ({ children }: { children: ReactNode }) => <div>{children}</div>,

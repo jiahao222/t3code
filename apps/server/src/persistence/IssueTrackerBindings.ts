@@ -4,12 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
-import {
-  IssueTrackerAccountId,
-  IssueTrackerKind,
-  IssueTrackerProjectBinding,
-  ProjectId,
-} from "@t3tools/contracts";
+import { IssueTrackerKind, IssueTrackerProjectBinding, ProjectId } from "@t3tools/contracts";
 
 import {
   PersistenceDecodeError,
@@ -20,26 +15,17 @@ import {
 const BindingRow = Schema.Struct({
   projectId: ProjectId,
   tracker: IssueTrackerKind,
-  accountId: Schema.NullOr(IssueTrackerAccountId),
   scope: Schema.String,
-  additionalScopes: Schema.fromJsonString(Schema.Array(Schema.String)),
-});
-
-const AccountRow = Schema.Struct({
-  tracker: IssueTrackerKind,
-  accountId: IssueTrackerAccountId,
 });
 
 /**
- * Which standalone issue tracker scopes each project reads beside its git host's own issues. A
- * project is bound to one tracker at most, and only while it has a row.
+ * Which standalone issue tracker scope each project reads beside its git host's own issues. A
+ * project is bound to one scope at most, and only while it has a row.
  */
 export class IssueTrackerBindingsRepository extends Context.Service<
   IssueTrackerBindingsRepository,
   {
-    readonly list: (
-      projectId?: ProjectId,
-    ) => Effect.Effect<
+    readonly list: Effect.Effect<
       ReadonlyMap<ProjectId, IssueTrackerProjectBinding>,
       IssueTrackerBindingsRepositoryError
     >;
@@ -50,32 +36,12 @@ export class IssueTrackerBindingsRepository extends Context.Service<
       /** When the binding was saved, as an ISO instant. */
       readonly updatedAt: string;
     }) => Effect.Effect<void, IssueTrackerBindingsRepositoryError>;
-    /**
-     * Unbinds every project that pointed at one account, when its credential is removed, and
-     * forgets an added account. A null account is the tracker's first, which has no row.
-     */
-    readonly removeAccount: (input: {
-      readonly tracker: IssueTrackerKind;
-      readonly accountId: IssueTrackerAccountId | null;
-    }) => Effect.Effect<void, IssueTrackerBindingsRepositoryError>;
-    /** The accounts added beside each tracker's first, oldest first. */
-    readonly listAccounts: Effect.Effect<
-      ReadonlyArray<{
-        readonly tracker: IssueTrackerKind;
-        readonly accountId: IssueTrackerAccountId;
-      }>,
-      IssueTrackerBindingsRepositoryError
-    >;
-    readonly addAccount: (input: {
-      readonly tracker: IssueTrackerKind;
-      readonly accountId: IssueTrackerAccountId;
-      /** When the account was added, as an ISO instant. */
-      readonly createdAt: string;
-    }) => Effect.Effect<void, IssueTrackerBindingsRepositoryError>;
+    /** Unbinds every project that pointed at the tracker, when its credential is removed. */
+    readonly removeTracker: (
+      tracker: IssueTrackerKind,
+    ) => Effect.Effect<void, IssueTrackerBindingsRepositoryError>;
   }
 >()("t3/persistence/IssueTrackerBindings/IssueTrackerBindingsRepository") {}
-
-const encodeAdditionalScopes = Schema.encodeEffect(BindingRow.fields.additionalScopes);
 
 function toSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
   return (cause: unknown): IssueTrackerBindingsRepositoryError =>
@@ -87,101 +53,47 @@ function toSqlOrDecodeError(sqlOperation: string, decodeOperation: string) {
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const select = sql`
-    SELECT project_id AS "projectId", tracker AS "tracker", account_id AS "accountId",
-      scope AS "scope", additional_scopes AS "additionalScopes"
-    FROM issue_tracker_bindings
-  `;
   const listRows = SqlSchema.findAll({
-    Request: Schema.UndefinedOr(ProjectId),
-    Result: BindingRow,
-    execute: (projectId) =>
-      projectId === undefined ? select : sql`${select} WHERE project_id = ${projectId}`,
-  });
-
-  const listAccountRows = SqlSchema.findAll({
     Request: Schema.Void,
-    Result: AccountRow,
+    Result: BindingRow,
     execute: () =>
       sql`
-        SELECT tracker AS "tracker", account_id AS "accountId"
-        FROM issue_tracker_accounts
-        ORDER BY created_at, account_id
+        SELECT project_id AS "projectId", tracker AS "tracker", scope AS "scope"
+        FROM issue_tracker_bindings
       `,
   });
 
   return IssueTrackerBindingsRepository.of({
-    list: Effect.fn("IssueTrackerBindingsRepository.list")((projectId?: ProjectId) =>
-      listRows(projectId).pipe(
-        Effect.map(
-          (rows) =>
-            new Map(
-              rows.map(
-                ({ projectId, accountId, additionalScopes, ...binding }) =>
-                  [
-                    projectId,
-                    {
-                      ...binding,
-                      ...(accountId === null ? {} : { accountId }),
-                      ...(additionalScopes.length === 0 ? {} : { additionalScopes }),
-                    },
-                  ] as const,
-              ),
-            ),
-        ),
-        Effect.mapError(toSqlOrDecodeError("listIssueTrackerBindings", "IssueTrackerBinding")),
+    list: listRows(undefined).pipe(
+      Effect.map(
+        (rows) =>
+          new Map(
+            rows.map((row) => [row.projectId, { tracker: row.tracker, scope: row.scope }] as const),
+          ),
       ),
+      Effect.mapError(toSqlOrDecodeError("listIssueTrackerBindings", "IssueTrackerBinding")),
     ),
     set: Effect.fn("IssueTrackerBindingsRepository.set")(
       function* (input) {
-        if (input.binding === null) {
-          yield* sql`DELETE FROM issue_tracker_bindings WHERE project_id = ${input.projectId}`;
-          return;
-        }
-        const additionalScopes = yield* encodeAdditionalScopes(
-          input.binding.additionalScopes ?? [],
-        );
-        yield* sql`
-              INSERT INTO issue_tracker_bindings (project_id, tracker, account_id, scope, additional_scopes, updated_at)
-              VALUES (
-                ${input.projectId}, ${input.binding.tracker}, ${input.binding.accountId ?? null},
-                ${input.binding.scope}, ${additionalScopes}, ${input.updatedAt}
-              )
+        yield* input.binding === null
+          ? sql`DELETE FROM issue_tracker_bindings WHERE project_id = ${input.projectId}`
+          : sql`
+              INSERT INTO issue_tracker_bindings (project_id, tracker, scope, updated_at)
+              VALUES (${input.projectId}, ${input.binding.tracker}, ${input.binding.scope}, ${input.updatedAt})
               ON CONFLICT (project_id)
-              DO UPDATE SET tracker = excluded.tracker, account_id = excluded.account_id,
-                scope = excluded.scope, additional_scopes = excluded.additional_scopes,
-                updated_at = excluded.updated_at
+              DO UPDATE SET tracker = excluded.tracker, scope = excluded.scope, updated_at = excluded.updated_at
             `;
       },
-      Effect.mapError(toSqlOrDecodeError("setIssueTrackerBinding", "IssueTrackerBinding")),
-    ),
-    removeAccount: Effect.fn("IssueTrackerBindingsRepository.removeAccount")(
-      function* ({ tracker, accountId }) {
-        yield* sql.withTransaction(
-          accountId === null
-            ? sql`DELETE FROM issue_tracker_bindings WHERE tracker = ${tracker} AND account_id IS NULL`
-            : Effect.andThen(
-                sql`DELETE FROM issue_tracker_bindings WHERE tracker = ${tracker} AND account_id = ${accountId}`,
-                sql`DELETE FROM issue_tracker_accounts WHERE tracker = ${tracker} AND account_id = ${accountId}`,
-              ),
-        );
-      },
       Effect.mapError(
-        (cause) => new PersistenceSqlError({ operation: "removeIssueTrackerAccount", cause }),
+        (cause) => new PersistenceSqlError({ operation: "setIssueTrackerBinding", cause }),
       ),
     ),
-    listAccounts: listAccountRows(undefined).pipe(
-      Effect.mapError(toSqlOrDecodeError("listIssueTrackerAccounts", "IssueTrackerAccount")),
-    ),
-    addAccount: Effect.fn("IssueTrackerBindingsRepository.addAccount")(
-      function* (input) {
-        yield* sql`
-          INSERT INTO issue_tracker_accounts (tracker, account_id, created_at)
-          VALUES (${input.tracker}, ${input.accountId}, ${input.createdAt})
-        `;
+    removeTracker: Effect.fn("IssueTrackerBindingsRepository.removeTracker")(
+      function* (tracker) {
+        yield* sql`DELETE FROM issue_tracker_bindings WHERE tracker = ${tracker}`;
       },
       Effect.mapError(
-        (cause) => new PersistenceSqlError({ operation: "addIssueTrackerAccount", cause }),
+        (cause) => new PersistenceSqlError({ operation: "removeIssueTrackerBindings", cause }),
       ),
     ),
   });

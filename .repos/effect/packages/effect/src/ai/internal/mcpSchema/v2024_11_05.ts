@@ -3,6 +3,8 @@
  *
  * Transport topology is intentionally not represented here. This module owns
  * the dated JSON-RPC method payloads and results only.
+ *
+ * @internal
  */
 import * as Option from "../../../Option.ts"
 import * as Rpc from "../../../rpc/Rpc.ts"

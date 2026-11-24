@@ -9,8 +9,6 @@ import type {
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { deriveTurnRepositoryChanges, type TurnRepositoryChanges } from "./threadRepositories.ts";
-
 export interface ThreadCheckpointSummary {
   readonly checkpointId?: CheckpointId;
   readonly scopeId?: CheckpointScopeId;
@@ -18,7 +16,7 @@ export interface ThreadCheckpointSummary {
   readonly checkpointTurnCount: number;
   readonly checkpointRef: CheckpointRef;
   readonly status: "ready" | "missing" | "error" | "stale";
-  /** A prefix of the changed files when `filesTotal` is set; see `changedFileTotals`. */
+  /** A prefix of the changed files when `filesTotal` is set; see `checkpointFileTotals`. */
   readonly files: ReadonlyArray<{
     readonly path: string;
     readonly kind: string;
@@ -26,26 +24,13 @@ export interface ThreadCheckpointSummary {
     readonly deletions: number;
   }>;
   readonly filesTotal?: OrchestrationV2CheckpointFileTotals;
-  /**
-   * Tracked repositories this turn changed, by name; set only when there are any. `files` above
-   * stays the thread folder's own, so a turn can have repositories while `status` is `missing`.
-   */
-  readonly repositories?: ReadonlyArray<TurnRepositoryChanges>;
   readonly assistantMessageId: MessageId | null;
   readonly completedAt: string;
 }
 
 export function deriveThreadCheckpointSummaries(
-  projection: Pick<OrchestrationV2ThreadProjection, "checkpoints" | "messages"> &
-    Partial<Pick<OrchestrationV2ThreadProjection, "checkpointScopes">>,
+  projection: Pick<OrchestrationV2ThreadProjection, "checkpoints" | "messages">,
 ): ReadonlyArray<ThreadCheckpointSummary> {
-  const repositoriesByRun =
-    projection.checkpointScopes === undefined
-      ? undefined
-      : deriveTurnRepositoryChanges({
-          checkpoints: projection.checkpoints,
-          checkpointScopes: projection.checkpointScopes,
-        });
   let assistantMessageIdsByRun: Map<RunId, MessageId | null | undefined> | undefined;
   let nextMessageIndex = -1;
   return projection.checkpoints.flatMap((checkpoint) => {
@@ -75,7 +60,6 @@ export function deriveThreadCheckpointSummaries(
       }
     }
     const assistantMessageId = assistantMessageIdsByRun.get(checkpoint.runId) ?? null;
-    const repositories = repositoriesByRun?.get(checkpoint.runId);
     return [
       {
         checkpointId: checkpoint.id,
@@ -86,10 +70,22 @@ export function deriveThreadCheckpointSummaries(
         status: checkpoint.status,
         files: checkpoint.files,
         ...(checkpoint.filesTotal === undefined ? {} : { filesTotal: checkpoint.filesTotal }),
-        ...(repositories === undefined ? {} : { repositories }),
         assistantMessageId,
         completedAt: DateTime.formatIso(checkpoint.capturedAt),
       },
     ];
   });
+}
+
+export function checkpointFileTotals(
+  checkpoint: Pick<ThreadCheckpointSummary, "files" | "filesTotal">,
+): OrchestrationV2CheckpointFileTotals {
+  if (checkpoint.filesTotal !== undefined) return checkpoint.filesTotal;
+  let additions = 0;
+  let deletions = 0;
+  for (const file of checkpoint.files) {
+    additions += file.additions;
+    deletions += file.deletions;
+  }
+  return { count: checkpoint.files.length, additions, deletions };
 }

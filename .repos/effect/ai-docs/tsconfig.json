@@ -17,8 +17,7 @@
         "namespaceImportPackages": [],
         "diagnosticSeverity": {
           "floatingEffect": "off",
-          "globalJson": "off",
-          "globalJsonInEffect": "off",
+          "preferSchemaOverJson": "off",
           "unstableApiUsage": "off",
           "effectFnOpportunity": "error"
         }

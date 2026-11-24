@@ -11,9 +11,7 @@ export default Effect.gen(function* () {
   yield* sql`
     UPDATE orchestration_v2_projection_subagents
     SET completion_delivery_state = json_extract(payload_json, '$.completionDelivery.state')
-    WHERE CASE WHEN json_valid(payload_json)
-      THEN json_type(payload_json, '$.completionDelivery') IS NOT NULL
-      ELSE 0 END
+    WHERE json_type(payload_json, '$.completionDelivery') IS NOT NULL
   `;
   yield* sql`
     CREATE INDEX orchestration_v2_projection_subagents_settled_idx

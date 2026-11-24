@@ -1,9 +1,6 @@
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import { availableScratchWorkspaceRoot } from "@t3tools/client-runtime/operations/projects";
-import {
-  isPickableProjectMember,
-  isRepositoryRootProject,
-} from "@t3tools/client-runtime/state/project-grouping";
+import { isPickableProjectMember } from "@t3tools/client-runtime/state/project-grouping";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { repositoryGroupingKeyOf, type EnvironmentId, type ServerConfig } from "@t3tools/contracts";
 
@@ -35,18 +32,11 @@ function selectOpenProjectScopeMember(
 
   const rank = (project: EnvironmentProject) =>
     project.environmentId === preferredEnvironmentId ? 0 : project === scope.representative ? 1 : 2;
-  open.sort(
-    (left, right) =>
-      rank(left) - rank(right) ||
-      Number(isRepositoryRootProject(right)) - Number(isRepositoryRootProject(left)),
-  );
+  open.sort((left, right) => rank(left) - rank(right));
   return open.find((project) => connectedEnvironmentIds.has(project.environmentId)) ?? open[0];
 }
 
-/**
- * Picker scopes have an open copy; prefer a connected one, then the selected environment, with a
- * repository root ahead of a sub-folder.
- */
+/** Picker scopes have an open copy; prefer a connected one, then the selected environment. */
 export function getProjectScopeSelectionTarget(
   scope: HomeProjectScope,
   preferredEnvironmentId: EnvironmentId | null,

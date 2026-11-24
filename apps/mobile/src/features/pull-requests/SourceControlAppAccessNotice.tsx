@@ -4,8 +4,7 @@ import {
   sourceControlClients,
 } from "@t3tools/client-runtime/source-control-clients";
 import { T, Var } from "gt-react-native";
-import { Pressable, View } from "react-native";
-import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { Linking, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { useEnvironmentPresentation } from "../../state/presentation";
@@ -54,7 +53,7 @@ export function SourceControlAppAccessNotice(props: {
       </Text>
       <Pressable
         accessibilityRole="link"
-        onPress={() => void tryOpenExternalUrl(appSignIn.installUrl, "provider-auth")}
+        onPress={() => void Linking.openURL(appSignIn.installUrl).catch(() => undefined)}
       >
         <Text className="text-sm font-t3-bold text-foreground">
           <T>

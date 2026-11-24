@@ -28,7 +28,6 @@ describe("Rpc", () => {
           }
         },
         requestId: RequestId("1"),
-        remoteParentSpan: undefined,
         headers: Headers.empty
       })
       assert.strictEqual(result, "two")

@@ -22,7 +22,7 @@ function sourceControlHostIcon(host: string): ReactNode {
 const MarkdownLinkFavicon = memo(function MarkdownLinkFavicon({ host }: { host: string }) {
   const [failedHost, setFailedHost] = useState<string | null>(null);
   const brandIcon = sourceControlHostIcon(host);
-  const faviconUrl = brandIcon ? null : faviconUrlForOrigin(`https://${host}`);
+  const faviconUrl: string | null = null;
   return (
     <span className="ms-[0.25em] me-[0.2em]" aria-hidden>
       {brandIcon ? (

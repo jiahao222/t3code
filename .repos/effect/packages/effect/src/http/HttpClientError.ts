@@ -10,7 +10,6 @@
  * @stability unstable
  * @since 4.0.0
  */
-import * as Cause from "../Cause.ts"
 import * as Data from "../Data.ts"
 import { hasProperty } from "../Predicate.ts"
 import * as Schema from "../Schema.ts"
@@ -90,76 +89,15 @@ const formatReason = (tag: string) => tag.endsWith("Error") ? tag.slice(0, -5) :
 const formatMessage = (reason: string, description: string | undefined, info: string) =>
   description ? `${reason}: ${description} (${info})` : `${reason} error (${info})`
 
-interface ReasonProps {
-  readonly request: HttpClientRequest.HttpClientRequest
-  readonly response?: ClientResponse.HttpClientResponse | undefined
-}
-
-type RedactedNames = ReadonlyArray<string | RegExp>
-
-// Both maps live outside the objects they describe, so structural `Equal` and
-// `Hash` don't see them, and neither is keyed on a request, which callers
-// reuse across executions under different names.
-//
-// `responseRedactedNames` holds the `UrlParams.CurrentRedactedNames` of the
-// fiber that executed a request, keyed on the response the runner produced and
-// on the wrapper `HttpClient.make` returns for it. A runner may return one
-// response to several executions, so an entry only grows.
-//
-// `redactedUrls` holds the URL of each reason, redacted when the reason was
-// created, because the fiber that renders an error later, such as a span
-// exporter, may not have the names of the request. An entry only ever gets more
-// redacted: the current fiber may be unrelated to the request when a transport
-// callback creates the error, so its names add redaction and never decide it.
-const responseRedactedNames = new WeakMap<ClientResponse.HttpClientResponse, RedactedNames>()
-const redactedUrls = new WeakMap<object, string>()
-
-const addRedactedNames = (reason: object, names: RedactedNames | undefined): void => {
-  const url = redactedUrls.get(reason)
-  if (url !== undefined && names !== undefined) redactedUrls.set(reason, UrlParams.redactUrl(url, names))
-}
-
-/** @internal */
-export const addResponseRedactedNames = (response: ClientResponse.HttpClientResponse, names: RedactedNames): void => {
-  const existing = responseRedactedNames.get(response)
-  responseRedactedNames.set(response, existing === undefined ? names : [...existing, ...names])
-}
-
-/**
- * Adds the names of the executing fiber to the errors a runner failed with,
- * once the failure is back on that fiber.
- *
- * @internal
- */
-export const addFailureRedactedNames = (cause: Cause.Cause<unknown>, names: RedactedNames): void => {
-  for (const reason of cause.reasons) {
-    if (Cause.isFailReason(reason) && isHttpClientError(reason.error)) addRedactedNames(reason.error.reason, names)
-  }
-}
-
-const ReasonError = <Tag extends string>(tag: Tag): ReturnType<typeof Data.TaggedError<Tag>> => {
-  class Base extends Data.TaggedError(tag)<ReasonProps> {
-    constructor(props: ReasonProps) {
-      super(props)
-      redactedUrls.set(this, UrlParams.redactUrl(props.request.url))
-      if (props.response !== undefined) addRedactedNames(this, responseRedactedNames.get(props.response))
-    }
-  }
-  return Base as any
-}
-
-// Rendering adds the names of the rendering fiber to the stored URL, so it
-// never redacts less than the names active at either point.
-const redactedUrl = (reason: ReasonProps): string => UrlParams.redactUrl(redactedUrls.get(reason) ?? reason.request.url)
-
-const formatMethodAndUrl = (reason: ReasonProps): string => `${reason.request.method} ${redactedUrl(reason)}`
+const formatMethodAndUrl = (request: HttpClientRequest.HttpClientRequest) =>
+  `${request.method} ${UrlParams.redactUrl(request.url)}`
 
 // Serialized reasons carry the same request and response information as the
 // message, so headers, URL parameters and bodies stay out of logs. The full
 // objects remain available through the `request` and `response` properties.
 const reasonToJSON = (reason: HttpClientErrorReason, json: unknown) => ({
   ...(json as object),
-  request: { _id: "HttpClientRequest", method: reason.request.method, url: redactedUrl(reason) },
+  request: { _id: "HttpClientRequest", method: reason.request.method, url: UrlParams.redactUrl(reason.request.url) },
   ...("response" in reason ? { response: { _id: "HttpClientResponse", status: reason.response.status } } : undefined)
 })
 
@@ -170,7 +108,7 @@ const reasonToJSON = (reason: HttpClientErrorReason, json: unknown) => ({
  * @category errors
  * @since 4.0.0
  */
-export class TransportError extends ReasonError("TransportError")<{
+export class TransportError extends Data.TaggedError("TransportError")<{
   readonly request: HttpClientRequest.HttpClientRequest
   readonly cause?: unknown
   readonly description?: string
@@ -182,7 +120,7 @@ export class TransportError extends ReasonError("TransportError")<{
    * @since 4.0.0
    */
   get methodAndUrl() {
-    return formatMethodAndUrl(this)
+    return formatMethodAndUrl(this.request)
   }
 
   /**
@@ -207,7 +145,7 @@ export class TransportError extends ReasonError("TransportError")<{
  * @category errors
  * @since 4.0.0
  */
-export class EncodeError extends ReasonError("EncodeError")<{
+export class EncodeError extends Data.TaggedError("EncodeError")<{
   readonly request: HttpClientRequest.HttpClientRequest
   readonly cause?: unknown
   readonly description?: string
@@ -219,7 +157,7 @@ export class EncodeError extends ReasonError("EncodeError")<{
    * @since 4.0.0
    */
   get methodAndUrl() {
-    return formatMethodAndUrl(this)
+    return formatMethodAndUrl(this.request)
   }
 
   /**
@@ -244,7 +182,7 @@ export class EncodeError extends ReasonError("EncodeError")<{
  * @category errors
  * @since 4.0.0
  */
-export class InvalidUrlError extends ReasonError("InvalidUrlError")<{
+export class InvalidUrlError extends Data.TaggedError("InvalidUrlError")<{
   readonly request: HttpClientRequest.HttpClientRequest
   readonly cause?: unknown
   readonly description?: string
@@ -256,7 +194,7 @@ export class InvalidUrlError extends ReasonError("InvalidUrlError")<{
    * @since 4.0.0
    */
   get methodAndUrl() {
-    return formatMethodAndUrl(this)
+    return formatMethodAndUrl(this.request)
   }
 
   /**
@@ -281,7 +219,7 @@ export class InvalidUrlError extends ReasonError("InvalidUrlError")<{
  * @category errors
  * @since 4.0.0
  */
-export class StatusCodeError extends ReasonError("StatusCodeError")<{
+export class StatusCodeError extends Data.TaggedError("StatusCodeError")<{
   readonly request: HttpClientRequest.HttpClientRequest
   readonly response: ClientResponse.HttpClientResponse
   readonly cause?: unknown
@@ -294,7 +232,7 @@ export class StatusCodeError extends ReasonError("StatusCodeError")<{
    * @since 4.0.0
    */
   get methodAndUrl() {
-    return formatMethodAndUrl(this)
+    return formatMethodAndUrl(this.request)
   }
 
   /**
@@ -321,7 +259,7 @@ export class StatusCodeError extends ReasonError("StatusCodeError")<{
  * @category errors
  * @since 4.0.0
  */
-export class DecodeError extends ReasonError("DecodeError")<{
+export class DecodeError extends Data.TaggedError("DecodeError")<{
   readonly request: HttpClientRequest.HttpClientRequest
   readonly response: ClientResponse.HttpClientResponse
   readonly cause?: unknown
@@ -334,7 +272,7 @@ export class DecodeError extends ReasonError("DecodeError")<{
    * @since 4.0.0
    */
   get methodAndUrl() {
-    return formatMethodAndUrl(this)
+    return formatMethodAndUrl(this.request)
   }
 
   /**
@@ -360,7 +298,7 @@ export class DecodeError extends ReasonError("DecodeError")<{
  * @category errors
  * @since 4.0.0
  */
-export class EmptyBodyError extends ReasonError("EmptyBodyError")<{
+export class EmptyBodyError extends Data.TaggedError("EmptyBodyError")<{
   readonly request: HttpClientRequest.HttpClientRequest
   readonly response: ClientResponse.HttpClientResponse
   readonly cause?: unknown
@@ -373,7 +311,7 @@ export class EmptyBodyError extends ReasonError("EmptyBodyError")<{
    * @since 4.0.0
    */
   get methodAndUrl() {
-    return formatMethodAndUrl(this)
+    return formatMethodAndUrl(this.request)
   }
 
   /**
@@ -453,10 +391,5 @@ export class HttpClientErrorSchema extends Schema.Error<HttpClientErrorSchema>(T
       kind: error.reason._tag,
       cause: error.reason
     })
-  }
-
-  override get message(): string {
-    const message = hasProperty(this.cause, "message") ? this.cause.message : undefined
-    return typeof message === "string" && message !== "" ? message : this.kind
   }
 }

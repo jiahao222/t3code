@@ -50,7 +50,7 @@ export function assertOpenCode2BackgroundOutput(
     (event) =>
       event.type === "run.updated" &&
       event.payload.id === rootRun?.id &&
-      event.payload.status === "completed",
+      event.payload.status === "waiting",
   );
   const subagentDone = indexOf(
     (event) =>

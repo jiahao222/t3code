@@ -109,94 +109,12 @@ export const closeTailscaleServeTo = Effect.fn("managedLimits.closeTailscaleServ
   target: { readonly host: string; readonly port: number },
 ) {
   if (allowsRemoteClients(policy)) return;
-  // Another app holds the port, so its routes are not ours to remove. It could let go before the
-  // bind, which would then take over those routes, so the server does not start.
   if (!(yield* (yield* NetService.NetService).canListenOnHost(target.port, target.host))) {
     return yield* refuseRemoteClients(
       policy,
-      `so the server does not start while it cannot bind ${target.host}:${target.port}; if another app holds that port, the server would take over its Tailscale Serve routes`,
+      `so the server does not start while it cannot bind ${target.host}:${target.port}`,
     );
   }
-  const readRoutes = readTailscaleServeRoutesTo(target).pipe(
-    Effect.catchTags({
-      // Only a CLI that is not there; one that will not run might still front a daemon.
-      TailscaleCommandSpawnError: (error) =>
-        isMissingCli(error.cause) ? Effect.succeed(NOTHING_FORWARDED) : Effect.fail(error),
-      TailscaleCommandExitError: (error) =>
-        NOTHING_TO_CLOSE.has(error.stderrDiagnostic)
-          ? Effect.succeed(NOTHING_FORWARDED)
-          : Effect.fail(error),
-    }),
-    // Tailscale errors carry only labelled diagnostics, never raw stderr, so they are safe to log.
-    Effect.tapError((cause) =>
-      Effect.logWarning("Tailscale Serve could not be checked", { cause }),
-    ),
-    Effect.mapError((error) =>
-      refuseRemoteClients(
-        policy,
-        error._tag === "TailscaleCommandTimeoutError"
-          ? // Seen on a Mac where Tailscale is installed but was never set up.
-            "so the server does not start until Tailscale Serve can be checked, and Tailscale did not answer; open Tailscale and finish setting it up, or remove it"
-          : "so the server does not start until Tailscale Serve can be checked",
-      ),
-    ),
-  );
-  const found = yield* readRoutes;
-  if (found.length === 0) return;
-  // `off` acts on the machine's current name, so a web route under a former name stays.
-  const currentName = found.some((route) => route.mount !== undefined && route.owner === undefined)
-    ? yield* readTailscaleStatus.pipe(
-        Effect.map((status) => status.magicDnsName?.toLowerCase() ?? null),
-        Effect.orElseSucceed(() => null),
-      )
-    : null;
-  const formerName = (route: TailscaleServeRoute) =>
-    route.owner === undefined &&
-    route.host !== undefined &&
-    currentName !== null &&
-    route.host.toLowerCase() !== currentName;
-  // A Service is shared across the tailnet, and a foreground route lives as long as its command.
-  const removable = (route: TailscaleServeRoute) =>
-    route.owner === undefined &&
-    route.ambiguous === undefined &&
-    (route.mount === undefined || (currentName !== null && !formerName(route)));
-  for (const route of found.filter(removable)) {
-    yield* (
-      route.mount === undefined
-        ? disableTailscaleServeTcp(route.servePort)
-        : disableTailscaleServe(route)
-    ).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Tailscale Serve route could not be turned off", { ...route, cause }),
-      ),
-    );
-  }
-  const left = yield* readRoutes;
-  if (left.length > 0) {
-    const describe = (route: TailscaleServeRoute) => {
-      const where = `port ${route.servePort}${route.mount === undefined ? "" : ` at ${route.mount}`} here`;
-      const off = tailscaleServeOffArgs(route);
-      if (off === undefined) return `${where}; stop the "tailscale serve" command that runs it`;
-      if (formerName(route)) {
-        return `${where} under ${route.host}, a former name of this machine, which "tailscale serve ... off" cannot reach; run "tailscale serve reset" and set up your other routes again`;
-      }
-      const command = `"tailscale ${off.join(" ")}"`;
-      // Without the current name, `off` might act on another name's route at this path.
-      if (currentName === null && route.owner === undefined && route.host !== undefined) {
-        return `${where} under ${route.host}; if that is this machine's current name, turn it off with ${command}`;
-      }
-      return route.ambiguous !== undefined
-        ? `${where}, and its target ${route.ambiguous} might be another service on this port; check it, then turn it off with ${command}`
-        : `${where}; turn it off with ${command}`;
-    };
-    return yield* refuseRemoteClients(
-      policy,
-      `so the server does not start while Tailscale Serve forwards ${left.map(describe).join(", and ")}`,
-    );
-  }
-  yield* Effect.logInfo("Turned off Tailscale Serve the managed policy does not allow", {
-    routes: found,
-  });
 });
 
 export const refuseRemoteClients = (policy: PolicyDocument, detail?: string) =>

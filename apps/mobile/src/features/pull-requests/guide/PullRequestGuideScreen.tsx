@@ -283,7 +283,6 @@ export function PullRequestGuideStopScreen({ route }: StaticScreenProps<GuideSto
                         ? navigation.navigate("PullRequestReview", {
                             ...route.params,
                             mode: "review",
-                            reviewedHeadSha: route.params.guideHeadSha,
                           })
                         : navigation.dispatch(StackActions.popTo("PullRequest", route.params))
                   }

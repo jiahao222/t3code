@@ -35,7 +35,6 @@ function MergeButton({ reference }: { reference: PullRequestRef }) {
   const { actionPending, pendingAction, perform } = usePullRequestActionRunner({
     environmentId: EnvironmentId.make("environment"),
     reference,
-    headSha: `head-${reference.number}`,
     terminology: sourceControlClients.get(undefined).changeRequest,
   });
   return (
@@ -82,11 +81,6 @@ it("keeps pending merges with their pull request when navigating between threads
   await expect.element(button).toBeEnabled();
   await userEvent.click(button);
   expect(state.runAction).toHaveBeenCalledTimes(2);
-  // Each merge is pinned to the head its own row showed.
-  expect(state.runAction.mock.calls.map(([call]) => call.input.expectedHeadSha)).toEqual([
-    "head-1",
-    "head-2",
-  ]);
 
   await screen.rerender(<MergeButton reference={first} />);
   await expect.element(button).toHaveTextContent("Merging...");

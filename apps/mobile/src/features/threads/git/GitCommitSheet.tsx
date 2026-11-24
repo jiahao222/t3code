@@ -11,33 +11,25 @@ import { SymbolView } from "../../../components/ui/AppSymbol";
 import { AppText as Text, AppTextInput as TextInput } from "../../../components/ui/AppText";
 import { cn } from "../../../lib/cn";
 import { useEnvironmentQuery } from "../../../state/query";
-import {
-  gitRepositoryTargetFromRoute,
-  type GitRepositoryRouteParams,
-} from "../../../state/thread-git-target";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
 import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
 import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-worktree";
 import { vcsEnvironment } from "../../../state/vcs";
 
-type GitCommitSheetProps = StaticScreenProps<
-  {
-    readonly environmentId: string;
-    readonly threadId: string;
-  } & GitRepositoryRouteParams
->;
+type GitCommitSheetProps = StaticScreenProps<{
+  readonly environmentId: string;
+  readonly threadId: string;
+}>;
 
-export function GitCommitSheet(props: GitCommitSheetProps) {
-  const repository = gitRepositoryTargetFromRoute(props.route.params);
+export function GitCommitSheet(_props: GitCommitSheetProps) {
   const gt = useGT();
   const navigation = useNavigation();
   const { selectedThread } = useThreadSelection();
-  const threadWorktree = useSelectedThreadWorktree();
-  const selectedThreadCwd = repository?.cwd ?? threadWorktree.selectedThreadCwd;
-  const gitState = useSelectedThreadGitState(repository);
-  const gitActions = useSelectedThreadGitActions(repository);
-  const { canWriteSourceControl, canCreateFeatureBranch } = gitActions;
+  const { selectedThreadCwd } = useSelectedThreadWorktree();
+  const gitState = useSelectedThreadGitState();
+  const gitActions = useSelectedThreadGitActions();
+  const { canWriteSourceControl, canChangeThreadBranch } = gitActions;
 
   const gitStatus = useEnvironmentQuery(
     selectedThread !== null && selectedThreadCwd !== null
@@ -62,7 +54,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
   const selectedDeletions = selectedFiles.reduce((sum, file) => sum + file.deletions, 0);
 
   const runCommitAction = async (featureBranch: boolean) => {
-    if (!canWriteSourceControl || (featureBranch && !canCreateFeatureBranch)) return;
+    if (!canWriteSourceControl || (featureBranch && !canChangeThreadBranch)) return;
     const commitMessage = dialogCommitMessage.trim();
     navigation.goBack();
     await gitActions.onRunSelectedThreadGitAction({
@@ -78,9 +70,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
       header={
         <SheetHeader
           title={gt("Commit changes")}
-          subtitle={[repository?.name, gitStatus.data?.refName ?? gt("(detached HEAD)")]
-            .filter(Boolean)
-            .join(" · ")}
+          subtitle={gitStatus.data?.refName ?? gt("(detached HEAD)")}
           onCancel={() => navigation.goBack()}
           accessibilityLabel={gt("Cancel commit")}
         />
@@ -227,7 +217,7 @@ export function GitCommitSheet(props: GitCommitSheetProps) {
           icon="arrow.branch"
           tone="text"
           fullWidth
-          disabled={!canWriteSourceControl || !canCreateFeatureBranch || noneSelected || busy}
+          disabled={!canWriteSourceControl || !canChangeThreadBranch || noneSelected || busy}
           onPress={() => void runCommitAction(true)}
         />
       </View>

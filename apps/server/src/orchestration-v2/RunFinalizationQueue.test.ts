@@ -1,8 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import { CheckpointScopeId, CommandId, GitCommandError, RunId, ThreadId } from "@t3tools/contracts";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
@@ -26,26 +24,20 @@ import * as RuntimeRequests from "./RuntimeRequestService.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
 import * as ThreadTitles from "./ThreadTitleRegenerationService.ts";
 
-const threadId = ThreadId.make("thread:finalization-queue");
-const runId = RunId.make("run:finalization-queue");
-const scopeId = CheckpointScopeId.make("scope:finalization-queue");
-const captureEffect = {
-  id: "effect:finalization-queue:capture",
-  commandId: CommandId.make("command:finalization-queue:capture"),
-  threadId,
-  request: { type: "checkpoint.capture" as const, runId, scopeId },
-};
-const startEffect = {
-  id: "effect:finalization-queue:start",
-  commandId: CommandId.make("command:finalization-queue:start"),
-  threadId,
-  request: { type: "provider-turn.start" as const, runId: RunId.make("run:next") },
-};
-
-const makeWorker = (
-  calls: string[],
-  capture: Effect.Effect<void, CheckpointCapture.CheckpointCaptureExecutionError>,
-) => {
+it.effect.each([
+  ["starts the next turn after a post-capture Git status failure", false],
+  ["keeps the next turn queued when checkpoint capture fails", true],
+] as const)("%s", ([, captureFails]) => {
+  const threadId = ThreadId.make("thread:finalization-queue");
+  const runId = RunId.make("run:finalization-queue");
+  const scopeId = CheckpointScopeId.make("scope:finalization-queue");
+  const calls: string[] = [];
+  const checkpointFailure = new CheckpointCapture.CheckpointCaptureExecutionError({
+    threadId,
+    runId,
+    scopeId,
+    cause: "checkpoint storage unavailable",
+  });
   const projections = Layer.mock(ProjectionStore.ProjectionStoreV2)({
     getCheckpointContext: () =>
       Effect.succeed({
@@ -84,7 +76,11 @@ const makeWorker = (
         projections,
         observer,
         Layer.mock(CheckpointCapture.CheckpointCaptureServiceV2)({
-          execute: () => Effect.sync(() => calls.push("capture")).pipe(Effect.andThen(capture)),
+          execute: () =>
+            Effect.gen(function* () {
+              calls.push("capture");
+              if (captureFails) return yield* checkpointFailure;
+            }),
         }),
       ),
     ),
@@ -110,24 +106,25 @@ const makeWorker = (
     ),
   );
   const outbox = EffectOutbox.layer.pipe(Layer.provide(SqlitePersistence.layerMemory));
-  return Layer.fresh(EffectWorker.layer.pipe(Layer.provideMerge(Layer.merge(executor, outbox))));
-};
+  const worker = EffectWorker.layer.pipe(Layer.provideMerge(Layer.merge(executor, outbox)));
 
-it.effect.each([
-  ["starts the next turn after a post-capture Git status failure", false],
-  ["keeps the next turn queued when checkpoint capture fails", true],
-] as const)("%s", ([, captureFails]) => {
-  const calls: string[] = [];
-  const checkpointFailure = new CheckpointCapture.CheckpointCaptureExecutionError({
-    threadId,
-    runId,
-    scopeId,
-    cause: "checkpoint storage unavailable",
-  });
   return Effect.gen(function* () {
     const queue = yield* EffectOutbox.EffectOutboxV2;
     const effectWorker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-    yield* queue.enqueue([captureEffect, startEffect]);
+    yield* queue.enqueue([
+      {
+        id: "effect:finalization-queue:capture",
+        commandId: CommandId.make("command:finalization-queue:capture"),
+        threadId,
+        request: { type: "checkpoint.capture", runId, scopeId },
+      },
+      {
+        id: "effect:finalization-queue:start",
+        commandId: CommandId.make("command:finalization-queue:start"),
+        threadId,
+        request: { type: "provider-turn.start", runId: RunId.make("run:next") },
+      },
+    ]);
 
     assert.equal(yield* effectWorker.drain(2), captureFails ? 1 : 2);
     const captured = Option.getOrThrow(yield* queue.get("effect:finalization-queue:capture"));
@@ -139,32 +136,5 @@ it.effect.each([
     assert.deepEqual(calls, captureFails ? ["capture"] : ["capture", "refresh", "start"]);
     if (captureFails) assert.include(captured.lastError ?? "", "checkpoint storage unavailable");
     else assert.equal(captured.lastError, null);
-  }).pipe(Effect.provide(makeWorker(calls, captureFails ? checkpointFailure : Effect.void)));
-});
-
-// A run completes before its capture, so the next turn's start is enqueued while capture runs.
-it.effect("keeps a next turn started during capture behind that capture", () => {
-  const calls: string[] = [];
-  return Effect.gen(function* () {
-    const captureStarted = yield* Deferred.make<void>();
-    const releaseCapture = yield* Deferred.make<void>();
-    const capture = Deferred.succeed(captureStarted, undefined).pipe(
-      Effect.andThen(Deferred.await(releaseCapture)),
-    );
-    return yield* Effect.gen(function* () {
-      const queue = yield* EffectOutbox.EffectOutboxV2;
-      const effectWorker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-      yield* queue.enqueue([captureEffect]);
-      const draining = yield* Effect.forkChild(effectWorker.drain(2));
-      yield* Deferred.await(captureStarted);
-
-      yield* queue.enqueue([startEffect]);
-      assert.isTrue(Option.isNone(yield* queue.claimNext({ workerId: "second-slot" })));
-      assert.deepEqual(calls, ["capture"]);
-
-      yield* Deferred.succeed(releaseCapture, undefined);
-      assert.equal(yield* Fiber.join(draining), 2);
-      assert.deepEqual(calls, ["capture", "refresh", "start"]);
-    }).pipe(Effect.provide(makeWorker(calls, capture)));
-  });
+  }).pipe(Effect.provide(Layer.fresh(worker)));
 });

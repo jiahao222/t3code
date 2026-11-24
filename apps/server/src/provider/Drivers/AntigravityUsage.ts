@@ -67,8 +67,9 @@ const make = Effect.gen(function* () {
     windowStartMs,
   }) {
     const roots: Array<string> = [];
+    const instanceRoots = new Map<string, (typeof instances)[number]["instanceId"]>();
     for (const instance of instances) roots.push(...(yield* dataRoots(instance.environment)));
-    for (const { instanceId } of instances) {
+    for (const { instanceId } of instances.filter((instance) => instance.configured)) {
       const directories = yield* resolveAntigravityInstanceDirectories(
         host.paths.stateDir,
         instanceId,
@@ -84,9 +85,12 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-      roots.push(path.join(directories.profile, "antigravity-acp"));
+      const root = path.join(directories.profile, "antigravity-acp");
+      roots.push(root);
+      instanceRoots.set(root, instanceId);
     }
     const conversationDirs = new Set<string>();
+    const instanceDirs = new Map<string, (typeof instances)[number]["instanceId"]>();
     for (const root of roots) {
       const resolvedRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
       const nested = path.join(resolvedRoot, "conversations");
@@ -95,7 +99,10 @@ const make = Effect.gen(function* () {
         .pipe(Effect.catchCause(() => Effect.succeed(false))))
         ? nested
         : resolvedRoot;
-      conversationDirs.add(yield* fileSystem.realPath(dir).pipe(Effect.orElseSucceed(() => dir)));
+      const canonical = yield* fileSystem.realPath(dir).pipe(Effect.orElseSucceed(() => dir));
+      conversationDirs.add(canonical);
+      const instanceId = instanceRoots.get(root);
+      if (instanceId !== undefined) instanceDirs.set(canonical, instanceId);
     }
     const result = yield* readAntigravityUsage([...conversationDirs], windowStartMs, cache).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -111,6 +118,7 @@ const make = Effect.gen(function* () {
       );
       scanned.push({
         dir,
+        ...(instanceDirs.has(dir) ? { providerInstanceId: instanceDirs.get(dir)! } : {}),
         files: !exists && !failed ? null : result.files.filter((file) => file.root === dir),
         status: failed ? "partial" : "ok",
         ...(failed ? { message: "Some Antigravity history could not be read." } : {}),

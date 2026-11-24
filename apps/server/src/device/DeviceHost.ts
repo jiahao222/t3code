@@ -67,8 +67,6 @@ export class AgentDeviceStartError extends Schema.TaggedError<AgentDeviceStartEr
 
 export interface DeviceHubEndpoint {
   readonly origin: string;
-  /** The hub's session token, which the hub requires on every request. */
-  readonly token?: string;
 }
 
 export interface AgentDeviceEndpoint {

@@ -43,11 +43,7 @@ function canReadHostMedia(environmentId: EnvironmentId | null): boolean {
   return result._tag !== "Failure" && allowsHostMedia(AsyncResult.getOrElse(result, () => null));
 }
 
-export function useMediaActions(
-  source: MediaActionsSource | undefined,
-  onOpenFile?: () => void,
-  options?: { readonly getSaveImageSignal: () => AbortSignal },
-) {
+export function useMediaActions(source: MediaActionsSource | undefined, onOpenFile?: () => void) {
   const navigation = useNavigation();
   const gt = useGT();
   const hostEnvironmentId =
@@ -68,7 +64,7 @@ export function useMediaActions(
   );
   const controller = useRef<AbortController | null>(null);
   const [busy, setBusy] = useState<"share" | "save-image" | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels page-owned work and stops updating busy state on unmount
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- aborts the in-flight media task when the component unmounts
   useEffect(() => () => controller.current?.abort(), []);
 
   const run = (
@@ -79,10 +75,9 @@ export function useMediaActions(
     const request = new AbortController();
     controller.current = request;
     setBusy(kind);
-    const signal = kind === "save-image" && options ? options.getSaveImageSignal() : request.signal;
-    return task(source, signal)
+    return task(source, request.signal)
       .catch((error: unknown) => {
-        if (!signal.aborted) {
+        if (!request.signal.aborted) {
           Dialog.alert(
             kind === "share" ? m(msg("Could not share file")) : m(msg("Could not save image")),
             errorDisplayMessage(error, m) ?? m(msg("Try again.")),

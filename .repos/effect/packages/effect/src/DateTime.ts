@@ -325,23 +325,8 @@ export declare namespace TimeZone {
    *
    * **Details**
    *
-   * The `id` field preserves the supplied identifier, including aliases such as
-   * `"Europe/Kyiv"` or `"US/Eastern"`. Intl supplies the casing only when its
-   * resolved identifier differs from the input solely in case. Local zones
-   * created without an explicit identifier use Intl's resolved identifier.
-   *
-   * `zoneToString`, the zone's `toJSON().id`, and the bracketed zone in
-   * `formatIsoZoned` use this `id`, as do the corresponding Schema string and
-   * JSON encodings. A `DateTime`'s own `toJSON()` still returns a UTC timestamp
-   * without a time zone identifier.
-   *
-   * **Gotchas**
-   *
-   * Casing is not normalized across aliases: `"europe/london"` becomes
-   * `"Europe/London"`, but `"europe/kyiv"` stays lowercase when Intl resolves it
-   * to `"Europe/Kiev"`. `Equal` and `Hash` use Intl's resolved identifier rather
-   * than `id`. Aliases compare equal only when the runtime resolves them to the
-   * same identifier, so equal zones can have different serialized names.
+   * The `id` field contains the resolved time zone identifier, such as
+   * `"Europe/London"` or `"America/New_York"`.
    *
    * @category models
    * @since 3.6.0
@@ -349,8 +334,6 @@ export declare namespace TimeZone {
   export interface Named extends Proto {
     readonly _tag: "Named"
     readonly id: string
-    /** @internal */
-    readonly resolvedId: string
     /** @internal */
     readonly format: Intl.DateTimeFormat
   }
@@ -1034,8 +1017,6 @@ export const setZoneOffset: {
  * **Details**
  *
  * If the time zone is invalid, an `IllegalArgumentError` will be thrown.
- * Supplied aliases are preserved, with case-only normalization as described
- * in {@link TimeZone.Named}.
  *
  * **Example** (Creating named time zones unsafely)
  *
@@ -1089,8 +1070,6 @@ export const zoneMakeOffset: (offset: number) => TimeZone.Offset = Internal.zone
  * **Details**
  *
  * If the time zone is invalid, `None` will be returned.
- * Supplied aliases are preserved, with case-only normalization as described
- * in {@link TimeZone.Named}.
  *
  * **Example** (Creating optional named time zones)
  *
@@ -1114,11 +1093,6 @@ export const zoneMakeNamed: (zoneId: string) => Option.Option<TimeZone.Named> = 
  *
  * Use when invalid IANA zone ids should fail in the Effect error channel
  * instead of returning `Option.none` or throwing.
- *
- * **Details**
- *
- * Supplied aliases are preserved, with case-only normalization as described
- * in {@link TimeZone.Named}.
  *
  * **Example** (Creating named time zones effectfully)
  *
@@ -1188,11 +1162,6 @@ export const zoneFromString: (zone: string) => Option.Option<TimeZone> = Interna
 
 /**
  * Formats a `TimeZone` as a string.
- *
- * **Details**
- *
- * Named zones return their `id`, preserving aliases as described in
- * {@link TimeZone.Named}. Offset zones return a signed offset such as `+03:00`.
  *
  * **Example** (Formatting time zones)
  *
@@ -2857,8 +2826,6 @@ export const formatIsoOffset: (self: DateTime) => string = Internal.formatIsoOff
  * **Details**
  *
  * It uses the format: `YYYY-MM-DDTHH:mm:ss.sss+HH:MM[Time/Zone]`.
- * Named zones use their `id` inside the brackets, preserving aliases as
- * described in {@link TimeZone.Named}. Offset zones omit the bracketed name.
  *
  * **Example** (Formatting zoned DateTime values)
  *

@@ -20,7 +20,7 @@ export function getDesktopScheme(isDevelopment: boolean): string {
   return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
 }
 
-export function getDesktopOrigin(isDevelopment: boolean): string {
+function getDesktopOrigin(isDevelopment: boolean): string {
   return `${getDesktopScheme(isDevelopment)}://${DESKTOP_HOST}`;
 }
 
@@ -67,32 +67,35 @@ export class ElectronProtocol extends Context.Service<
 >()("@t3tools/desktop/electron/ElectronProtocol") {}
 
 function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrationInput): string {
-  const clerkOrigin = input.clerkFrontendApiHostname
-    ? `https://${input.clerkFrontendApiHostname}`
-    : undefined;
   const scriptSources = [
     "'self'",
     "'unsafe-inline'",
     "'wasm-unsafe-eval'",
-    ...(clerkOrigin ? [clerkOrigin] : []),
-    "https://challenges.cloudflare.com",
   ];
 
-  // User-configured environment origins are unknown here, so allow supported network schemes.
-  // GLTFLoader fetches embedded textures through blob URLs.
-  const connectSources = ["'self'", "blob:", "http:", "https:", "ws:", "wss:"];
+  const connectSources = [
+    "'self'",
+    "blob:",
+    "http://127.0.0.1:*",
+    "http://localhost:*",
+    "http://[::1]:*",
+    "ws://127.0.0.1:*",
+    "ws://localhost:*",
+    "ws://[::1]:*",
+    "https://cdn.agentclientprotocol.com",
+  ];
 
   return [
     "default-src 'self'",
     `script-src ${scriptSources.join(" ")}`,
     `connect-src ${connectSources.join(" ")}`,
-    `img-src 'self' ${input.scheme}: blob: data: http: https:`,
-    `media-src 'self' ${input.scheme}: blob: http: https:`,
+    `img-src 'self' ${input.scheme}: blob: data: http://127.0.0.1:* http://localhost:* http://[::1]:* https://cdn.agentclientprotocol.com`,
+    `media-src 'self' ${input.scheme}: blob: http://127.0.0.1:* http://localhost:* http://[::1]:*`,
     "style-src 'self' 'unsafe-inline'",
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
-    "frame-src 'self' blob: http: https:",
-    "object-src 'self' blob: http: https:",
+    "frame-src 'self' blob: http://127.0.0.1:* http://localhost:* http://[::1]:*",
+    "object-src 'self' blob: http://127.0.0.1:* http://localhost:* http://[::1]:*",
     "form-action 'self'",
   ].join("; ");
 }

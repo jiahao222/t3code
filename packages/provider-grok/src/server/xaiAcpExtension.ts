@@ -1211,9 +1211,7 @@ function normalizeAnswerForXAi(
 ): NormalizedXAiAnswer | undefined {
   const values = answerValues(answer);
   if (values.length === 0) {
-    return question.multiSelect === true && Array.isArray(answer)
-      ? { questionText: question.question, selectedLabels: [] }
-      : undefined;
+    return undefined;
   }
 
   const optionByLabel = new Map(question.options.map((option) => [option.label, option]));

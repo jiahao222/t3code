@@ -4,13 +4,9 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { ProviderDriverKind, TextGenerationError } from "@t3tools/contracts";
+import { TextGenerationError } from "@t3tools/contracts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
-import {
-  brokenVersionDetail,
-  noCompatibilityPolicy,
-  type ProviderCompatibilityLookup,
-} from "@t3tools/provider-core/server/compatibility";
+import { compareSemverVersions } from "@t3tools/shared/semver";
 import { parseGenericCliVersion } from "@t3tools/provider-core/server/snapshotProbe";
 import type { PiSettings } from "../settings.ts";
 
@@ -18,7 +14,7 @@ import { makePiRpcConnection, piRecordField, piRecordString, resolvePiModelSlug 
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
 import { isPiThinkingLevel } from "./modelCapabilities.ts";
-import { runPiVersionCommand } from "./status.ts";
+import { MINIMUM_PI_VERSION, runPiVersionCommand } from "./status.ts";
 
 const PI_TIMEOUT_MS = 180_000;
 
@@ -36,7 +32,6 @@ const piTurnErrorDetail = (errorMessage: string | undefined) => {
 export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* (
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
-  compatibility: ProviderCompatibilityLookup = noCompatibilityPolicy,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -53,16 +48,11 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
           Option.isSome(output) && output.value.code === 0
             ? parseGenericCliVersion(`${output.value.stdout}\n${output.value.stderr}`)
             : null;
-        const broken =
-          version === null
-            ? "T3 Code could not determine the Pi version. Update Pi and try again."
-            : brokenVersionDetail({
-                name: "Pi",
-                version,
-                advisory: yield* compatibility(ProviderDriverKind.make("pi"), version),
-              });
-        if (broken !== undefined) {
-          return yield* new TextGenerationError({ operation, detail: broken });
+        if (version === null || compareSemverVersions(version, MINIMUM_PI_VERSION) < 0) {
+          return yield* new TextGenerationError({
+            operation,
+            detail: `Pi ${MINIMUM_PI_VERSION} or newer is required for text generation thinking options. Update Pi and try again.`,
+          });
         }
       }
 

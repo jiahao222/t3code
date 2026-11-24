@@ -22,8 +22,10 @@ describe("JsonSchemaGenerator representation", () => {
 
     assert.strictEqual(
       output,
-      `export type Shared = string
+      `// non-recursive definitions
+export type Shared = string
 export const Shared = Schema.String.annotate({ "identifier": "Shared" })
+// schemas
 export type Root = Shared
 export const Root = Shared
 `

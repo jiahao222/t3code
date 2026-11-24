@@ -31,7 +31,6 @@ import * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@t3tools/shared/AgentScope";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { windowsSystem32Path } from "@t3tools/shared/windowsSystem";
 
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
 import { appendAcpStderrTail, sanitizeAcpStderrExcerpt } from "./stderr.ts";
@@ -86,8 +85,6 @@ export type AcpSessionRuntimeEvent =
     };
 
 const defaultSessionLoadTimeout = Duration.seconds(90);
-// A live child that never answers the handshake would otherwise hold the start open forever.
-const startupRequestTimeout = Duration.seconds(90);
 const defaultSessionLoadReplayIdleGap = Duration.seconds(2);
 const defaultCancelTimeout = Duration.seconds(15);
 const maxStartupMetadataUpdates = 32;
@@ -102,11 +99,6 @@ export interface AcpSpawnInput {
   readonly extendEnv?: boolean;
   readonly shell?: false;
 }
-
-// A provided env is the complete child environment, as in OpenCodeRuntime. Extending it would
-// put back variables the AppImage scrub deleted, such as a mount-only LD_LIBRARY_PATH.
-const spawnExtendsEnv = (spawn: AcpSpawnInput): boolean =>
-  spawn.extendEnv ?? spawn.env === undefined;
 
 export interface AcpSessionRuntimeOptions {
   readonly spawn: AcpSpawnInput;
@@ -143,8 +135,6 @@ export interface AcpSessionRuntimeOptions {
   readonly mcpServers?: ReadonlyArray<EffectAcpSchema.McpServer>;
   /** Sent on every session/new, load, resume and fork; omitting them clears an agent's stored roots. */
   readonly additionalDirectories?: ReadonlyArray<string>;
-  /** The thread's other folders, sent the same way when the agent advertises the capability. */
-  readonly extraRoots?: ReadonlyArray<string>;
   /** Session `_meta`, chosen from the negotiated agent before each session setup or activation. */
   readonly sessionMeta?: (
     initializeResult: EffectAcpSchema.InitializeResponse,
@@ -1050,12 +1040,7 @@ const terminateWindowsProcessTreeWithTaskkill = (
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const taskkill = yield* spawner.spawn(
-        ChildProcess.make(windowsSystem32Path(yield* HostProcess.Environment, "taskkill.exe"), [
-          "/PID",
-          String(pid),
-          "/T",
-          "/F",
-        ]),
+        ChildProcess.make("taskkill", ["/PID", String(pid), "/T", "/F"]),
       );
       const outputFiber = yield* Stream.decodeText(taskkill.all).pipe(
         Stream.mkString,
@@ -1154,6 +1139,9 @@ export class AcpSessionRuntime extends Context.Service<
     readonly getConfigOptions: Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
     /** The current configuration options, then each later change. */
     readonly configOptionChanges: Stream.Stream<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
+    readonly newSession?: (
+      options?: AcpSessionActivationOptions,
+    ) => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
     readonly loadSession: (
       sessionId: string,
       options?: AcpSessionActivationOptions,
@@ -1412,25 +1400,6 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       Effect.andThen(runLoggedRequest(method, payload, effect)),
     );
 
-  const withStartupTimeout = <A>(
-    method: string,
-    effect: Effect.Effect<A, EffectAcpErrors.AcpError>,
-  ): Effect.Effect<A, EffectAcpErrors.AcpError> =>
-    effect.pipe(
-      Effect.timeoutOrElse({
-        duration: startupRequestTimeout,
-        orElse: () =>
-          Effect.fail(
-            new EffectAcpErrors.AcpTransportError({
-              operation: "call-rpc",
-              method,
-              detail: `${method} timed out waiting for RPC response`,
-              cause: undefined,
-            }),
-          ),
-      }),
-    );
-
   const runLoggedRequest = <A>(
     method: string,
     payload: unknown,
@@ -1467,11 +1436,8 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       ? { command: options.spawn.command, args: options.spawn.args, shell: false }
       : yield* resolveSpawnCommand(options.spawn.command, options.spawn.args, {
           ...(options.spawn.env ? { env: options.spawn.env } : {}),
-          extendEnv: spawnExtendsEnv(options.spawn),
+          extendEnv: options.spawn.extendEnv ?? true,
         });
-  const commandLookupEnv = spawnExtendsEnv(options.spawn)
-    ? { ...process.env, ...options.spawn.env }
-    : (options.spawn.env ?? {});
   const linuxCgroupLease =
     options.ownDescendantProcessGroups === true && options.processGroupPlatform === "linux"
       ? yield* Effect.sync(() => {
@@ -1500,7 +1466,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           const resolved = resolveLinuxCgroupTargetCommand(
             spawnCommand.command,
             options.spawn.cwd ?? options.cwd,
-            commandLookupEnv,
+            { ...process.env, ...options.spawn.env },
           );
           if (resolved !== undefined) return resolved;
           return yield* new EffectAcpErrors.AcpSpawnError({
@@ -1517,7 +1483,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           args: spawnCommand.args,
           name: "acp",
           threadId: yield* AgentScopeThreadId,
-          env: commandLookupEnv,
+          env: { ...process.env, ...options.spawn.env },
         });
   const scopedSpawnCommand =
     scopedLaunch === undefined ? spawnCommand : { ...scopedLaunch, shell: false };
@@ -1546,7 +1512,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       ChildProcess.make(containedSpawnCommand.command, containedSpawnCommand.args, {
         ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
         ...(spawnEnvironment ? { env: spawnEnvironment } : {}),
-        extendEnv: spawnExtendsEnv(options.spawn),
+        extendEnv: options.spawn.extendEnv ?? true,
         // Windows `detached` gives the child its own console, which breaks stdio pipes through
         // `.cmd` shims; taskkill /T cleans up the tree there without it.
         ...(options.ownDetachedProcessGroup === undefined
@@ -2332,7 +2298,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     const initializeResult = yield* runLoggedRequest(
       "initialize",
       initializePayload,
-      withStartupTimeout("initialize", acp.agent.initialize(initializePayload)),
+      acp.agent.initialize(initializePayload),
     );
     yield* options.onInitialized?.(initializeResult) ?? Effect.void;
     return initializeResult;
@@ -2389,14 +2355,10 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
 
   const sessionSetupFields = (initializeResult: EffectAcpSchema.InitializeResponse) => {
     const meta = options.sessionMeta?.(initializeResult);
-    const additionalDirectories = [
-      ...(options.additionalDirectories ?? []),
-      ...(initializeResult.agentCapabilities?.sessionCapabilities?.additionalDirectories == null
-        ? []
-        : (options.extraRoots ?? [])),
-    ];
     return {
-      ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
+      ...(options.additionalDirectories?.length
+        ? { additionalDirectories: options.additionalDirectories }
+        : {}),
       ...(meta == null ? {} : { _meta: meta }),
     };
   };
@@ -2480,7 +2442,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
           sessionSetupResult = yield* runLoggedRequest(
             "session/resume",
             resumePayload,
-            withStartupTimeout("session/resume", acp.agent.resumeSession(resumePayload)),
+            acp.agent.resumeSession(resumePayload),
           );
         } else {
           return yield* new EffectAcpErrors.AcpRequestError({
@@ -2497,7 +2459,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         const created = yield* runLoggedRequest(
           "session/new",
           createPayload,
-          withStartupTimeout("session/new", acp.agent.createSession(createPayload)),
+          acp.agent.createSession(createPayload),
         );
         sessionId = created.sessionId;
         sessionSetupResult = created;
@@ -2708,6 +2670,23 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     getModeState: Ref.get(modeStateRef),
     getConfigOptions: SubscriptionRef.get(configOptionsRef),
     configOptionChanges: SubscriptionRef.changes(configOptionsRef),
+    newSession: (activationOptions) =>
+      start.pipe(
+        Effect.tap(() => cancelLateSessionLoad),
+        Effect.flatMap((started) => {
+          const requestPayload = {
+            cwd: options.cwd,
+            ...sessionSetupFields(started.initializeResult),
+            mcpServers: sessionMcpServers(started.initializeResult, activationOptions),
+          } satisfies EffectAcpSchema.NewSessionRequest;
+          return runLoggedRequest(
+            "session/new",
+            requestPayload,
+            acp.agent.createSession(requestPayload),
+          );
+        }),
+        Effect.flatMap((response) => adoptSession(response.sessionId, response)),
+      ),
     loadSession: (sessionId, activationOptions) =>
       start.pipe(
         Effect.flatMap((started) => {
@@ -3096,25 +3075,10 @@ const handleSessionUpdate =
       );
     }
     const parsed = parseSessionUpdateEvent(params);
-    const modeId = parsed.modeId;
-    if (modeId) {
+    if (parsed.modeId) {
       yield* Ref.update(modeStateRef, (current) =>
-        current === undefined ? current : updateModeState(current, modeId),
+        current === undefined ? current : updateModeState(current, parsed.modeId!),
       );
-      // A mode-only update would otherwise leave the mode option showing the old mode.
-      const configOptions = yield* SubscriptionRef.get(configOptionsRef);
-      const isStaleMode = (option: (typeof configOptions)[number]) =>
-        option.category === "mode" && option.type === "select" && option.currentValue !== modeId;
-      if (configOptions.some(isStaleMode)) {
-        yield* SubscriptionRef.set(
-          configOptionsRef,
-          configOptions.map((option) =>
-            option.category === "mode" && option.type === "select"
-              ? { ...option, currentValue: modeId }
-              : option,
-          ),
-        );
-      }
     }
     for (const event of parsed.events) {
       if (event._tag === "ToolCallUpdated") {

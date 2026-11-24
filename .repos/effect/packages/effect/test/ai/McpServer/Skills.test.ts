@@ -268,14 +268,7 @@ describe("McpServer skills", () => {
   })
 
   describe("sessionful revisions", () => {
-    for (
-      const protocol of [
-        McpProtocol.v2024_11_05,
-        McpProtocol.v2025_03_26,
-        McpProtocol.v2025_06_18,
-        McpProtocol.v2025_11_25
-      ]
-    ) {
+    for (const protocol of [McpProtocol.v2025_11_25, McpProtocol.v2024_11_05]) {
       it.effect(`serves the extension without cache attributes on ${protocol.protocolVersion}`, () =>
         Effect.gen(function*() {
           const harness = yield* makeHttpHarness(Skills.pipe(Layer.provideMerge(makeServerLayer({
@@ -313,11 +306,6 @@ describe("McpServer skills", () => {
           const get = yield* post("skills/get", { uri: "skill://acme/billing/refunds/SKILL.md" })
           assert.deepStrictEqual(Object.keys(get.result), ["skill"])
           assert.strictEqual(get.result.skill.frontmatter.name, "refunds")
-
-          for (const method of ["skills/list", "resources/directory/read"]) {
-            const invalidCursor = yield* post(method, { uri: "skill://acme", cursor: "unknown" })
-            assert.strictEqual(invalidCursor.error.code, -32602)
-          }
 
           const missing = yield* post("skills/get", { uri: "skill://acme/missing/SKILL.md" })
           assert.strictEqual(missing.error.code, -32602)

@@ -12,7 +12,6 @@
  * @since 4.0.0
  */
 import * as Config from "../Config.ts"
-import * as Context from "../Context.ts"
 import * as Effect from "../Effect.ts"
 import { dual, identity, type LazyArg } from "../Function.ts"
 import * as Option from "../Option.ts"
@@ -21,7 +20,7 @@ import * as Predicate from "../Predicate.ts"
 import type * as Redacted_ from "../Redacted.ts"
 import * as Result from "../Result.ts"
 import * as Schema from "../Schema.ts"
-import type { Covariant, NoInfer } from "../Types.ts"
+import type { Covariant } from "../Types.ts"
 import * as CliError from "./CliError.ts"
 import type { Environment } from "./Command.ts"
 import * as Primitive from "./Primitive.ts"
@@ -224,11 +223,6 @@ export interface Single<Kind extends ParamKind, out A> extends Param<Kind, A> {
    * default `no-<name>`, `false` means no negated form. See `withNegation`.
    */
   readonly negation?: string | false | undefined
-  /**
-   * User-defined annotations attached with `annotate`. Never read by the
-   * parser or by help; surfaced by `CommandSpec` for documentation tooling.
-   */
-  readonly annotations: Context.Context<never>
 }
 
 /**
@@ -264,34 +258,7 @@ export interface Transform<Kind extends ParamKind, in out A, out B> extends Para
     parse: Parse<A>,
     alternatives: ReadonlyArray<LazyArg<Parse<unknown>>>
   ) => Parse<B>
-  /**
-   * Structural description of the fallback this node adds when the parameter
-   * is missing, if any. Set by `withDefault`, `withFallbackConfig` and
-   * `withFallbackPrompt`; it is never evaluated, only reported.
-   */
-  readonly fallback?: Fallback | undefined
 }
-
-/**
- * Describes, without evaluating it, how a parameter obtains a value when it is
- * absent from the command line.
- *
- * **Details**
- *
- * `Default` carries the literal value given to `withDefault`. The other
- * variants only record that a fallback exists: an effectful default, a
- * `Config` lookup or an interactive prompt cannot be inspected without
- * running them, so documentation tooling describes them by kind.
- *
- * @stability unstable
- * @category models
- * @since 4.1.3
- */
-export type Fallback =
-  | { readonly _tag: "Default"; readonly value: unknown }
-  | { readonly _tag: "DefaultEffect" }
-  | { readonly _tag: "Config" }
-  | { readonly _tag: "Prompt" }
 
 /**
  * Parameter node that turns a missing argument or flag into `Option.none()` and
@@ -407,7 +374,6 @@ export const makeSingle = <const Kind extends ParamKind, A>(params: {
   readonly hidden?: boolean | undefined
   readonly optionalValue?: string | undefined
   readonly negation?: string | false | undefined
-  readonly annotations?: Context.Context<never> | undefined
 }): Single<Kind, A> => {
   const parse: Parse<A> = (args) =>
     params.kind === argumentKind
@@ -419,7 +385,6 @@ export const makeSingle = <const Kind extends ParamKind, A>(params: {
     description: params.description ?? Option.none(),
     aliases: params.aliases ?? [],
     hidden: params.hidden ?? false,
-    annotations: params.annotations ?? Context.empty(),
     parse
   }, Proto)
 }
@@ -1110,64 +1075,6 @@ export const withHidden = <Kind extends ParamKind, A>(self: Param<Kind, A>): Par
     }))
 
 /**
- * Attaches a user-defined annotation to a parameter.
- *
- * **When to use**
- *
- * Use when documentation tooling needs facts the parser cannot know, such as
- * the environment variable behind a `withFallbackConfig`, or a deprecation
- * note. Annotations are keyed by a `Context.Key`, exactly like
- * `Command.annotate`.
- *
- * **Details**
- *
- * Annotations never affect parsing, help or completions. They are reported
- * by `CommandSpec.resolve` on each flag and argument, and survive combinators
- * applied before or after them.
- *
- * **Example** (Recording the environment variable behind a config fallback)
- *
- * ```ts import.meta.vitest
- * import { Config, Context } from "effect"
- * import { Param } from "effect/cli"
- *
- * const EnvVar = Context.Service<never, string>("app/EnvVar")
- *
- * const token = Param.String(Param.flagKind, "token").pipe(
- *   Param.withFallbackConfig(Config.String("APP_TOKEN")),
- *   Param.annotate(EnvVar, "APP_TOKEN")
- * )
- * token.kind // => "flag"
- * ```
- *
- * @see {@link Single} for where annotations are stored
- *
- * @stability unstable
- * @category metadata
- * @since 4.1.3
- */
-export const annotate: {
-  <I, S>(
-    key: Context.Key<I, S>,
-    value: NoInfer<S>
-  ): <Kind extends ParamKind, A>(self: Param<Kind, A>) => Param<Kind, A>
-  <Kind extends ParamKind, A, I, S>(
-    self: Param<Kind, A>,
-    key: Context.Key<I, S>,
-    value: NoInfer<S>
-  ): Param<Kind, A>
-} = dual(3, <Kind extends ParamKind, A, I, S>(
-  self: Param<Kind, A>,
-  key: Context.Key<I, S>,
-  value: NoInfer<S>
-): Param<Kind, A> =>
-  transformSingle(self, <X>(single: Single<Kind, X>) =>
-    makeSingle({
-      ...single,
-      annotations: Context.add(single.annotations, key, value)
-    })))
-
-/**
  * Transforms the parsed value of an option using a mapping function.
  *
  * **Example** (Mapping parsed values)
@@ -1209,8 +1116,7 @@ const transform = <Kind extends ParamKind, A, B>(
     parse: Parse<A>,
     alternatives: ReadonlyArray<LazyArg<Parse<unknown>>>
   ) => Parse<B>,
-  alternatives: ReadonlyArray<LazyArg<Param<Kind, unknown>>> = [],
-  fallback?: Fallback | undefined
+  alternatives: ReadonlyArray<LazyArg<Param<Kind, unknown>>> = []
 ): Transform<Kind, A, B> => {
   const alternativeParsers = alternatives.map((alternative) => () => alternative().parse)
   return Object.assign(Object.create(Proto), {
@@ -1219,7 +1125,6 @@ const transform = <Kind extends ParamKind, A, B>(
     param: self,
     alternatives,
     f,
-    fallback,
     parse: f(self.parse, alternativeParsers)
   })
 }
@@ -1479,27 +1384,14 @@ export const withDefault: {
   defaultValue: B | Effect.Effect<B, CliError.CliError, Environment>
 ): Param<Kind, A | B> => {
   if (!Effect.isEffect(defaultValue)) {
-    return transform(
-      optional(self),
-      (parse) => (args) =>
-        Effect.map(
-          parse(args),
-          ([leftover, value]) => [leftover, Option.getOrElse(value, () => defaultValue)] as const
-        ),
-      [],
-      { _tag: "Default", value: defaultValue }
-    )
+    return map(optional(self), Option.getOrElse(() => defaultValue))
   }
-  return transform(
-    optional(self),
-    (parse): Parse<A | B> => (args) =>
-      Effect.flatMap(parse(args), ([leftover, value]): ReturnType<Parse<A | B>> =>
-        Option.match(value, {
-          onNone: () => Effect.map(defaultValue, (b) => [leftover, b] as const),
-          onSome: (a) => Effect.succeed([leftover, a] as const)
-        })),
-    [],
-    { _tag: "DefaultEffect" }
+  return mapEffect(
+    optional(self as Param<Kind, A | B>),
+    Option.match({
+      onNone: () => defaultValue,
+      onSome: Effect.succeed
+    })
   )
 })
 
@@ -1558,9 +1450,7 @@ export const withFallbackConfig: {
     (parse) => (args) =>
       parse(args).pipe(
         Effect.catchTag(["MissingOption", "MissingArgument"], (error) => runConfig(error, args))
-      ),
-    [],
-    { _tag: "Config" }
+      )
   )
 })
 
@@ -1615,9 +1505,7 @@ export const withFallbackPrompt: {
     (parse) => (args) =>
       parse(args).pipe(
         Effect.catchTag(["MissingOption", "MissingArgument"], (error) => runPrompt(error, args))
-      ),
-    [],
-    { _tag: "Prompt" }
+      )
   )
 })
 
@@ -2423,8 +2311,7 @@ const transformSingle = <Kind extends ParamKind, A>(
       transform(
         transformSingle(mapped.param, f),
         mapped.f,
-        mapped.alternatives.map((alternative) => () => transformSingle(alternative(), f)),
-        mapped.fallback
+        mapped.alternatives.map((alternative) => () => transformSingle(alternative(), f))
       ),
     Optional: (p) => optional(transformSingle(p.param, f)) as Param<Kind, A>,
     Variadic: (p) =>
@@ -2481,58 +2368,36 @@ export const getUnderlyingSingleOrThrow = <Kind extends ParamKind, A>(
 }
 
 /**
- * Structural facts about a param, gathered by traversing its combinator nodes.
- *
- * @internal
- */
-export interface ParamMetadata {
-  readonly isOptional: boolean
-  readonly isVariadic: boolean
-  readonly variadicMin: Option.Option<number>
-  readonly variadicMax: Option.Option<number>
-  /**
-   * Whether parsing fails when the parameter is absent and no fallback
-   * supplies a value: an `optional` wrapper or a zero-minimum variadic makes
-   * a param not required. Help additionally never displays boolean flags as
-   * required; that is a rendering choice, not a parsing one.
-   */
-  readonly isRequired: boolean
-}
-
-/**
  * Gets param metadata by traversing the structure.
  *
  * @internal
  */
-export const getParamMetadata = <Kind extends ParamKind, A>(param: Param<Kind, A>): ParamMetadata => {
-  const metadata = collectParamMetadata(param)
-  return {
-    ...metadata,
-    isRequired: !metadata.isOptional &&
-      (!metadata.isVariadic || Option.exists(metadata.variadicMin, (min) => min > 0))
-  }
-}
-
-const collectParamMetadata = <Kind extends ParamKind, A>(
+export const getParamMetadata = <Kind extends ParamKind, A>(
   param: Param<Kind, A>
-): Omit<ParamMetadata, "isRequired"> =>
-  matchParam(param, {
+): {
+  readonly isOptional: boolean
+  readonly isVariadic: boolean
+  readonly variadicMin: Option.Option<number>
+  readonly variadicMax: Option.Option<number>
+} => {
+  return matchParam(param, {
     Single: () => ({
       isOptional: false,
       isVariadic: false,
       variadicMin: Option.none(),
       variadicMax: Option.none()
     }),
-    Map: (mapped) => collectParamMetadata(mapped.param),
-    Transform: (mapped) => collectParamMetadata(mapped.param),
+    Map: (mapped) => getParamMetadata(mapped.param),
+    Transform: (mapped) => getParamMetadata(mapped.param),
     Optional: (optional) => ({
-      ...collectParamMetadata(optional.param),
+      ...getParamMetadata(optional.param),
       isOptional: true
     }),
     Variadic: (variadic) => ({
-      ...collectParamMetadata(variadic.param),
+      ...getParamMetadata(variadic.param),
       isVariadic: true,
       variadicMin: variadic.min,
       variadicMax: variadic.max
     })
   })
+}

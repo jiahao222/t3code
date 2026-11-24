@@ -226,8 +226,7 @@ export const makeWebSocket: (
               Effect.sync(() => {
                 conn.close()
               })
-          ),
-          { disableReconnects: true }
+          )
         ),
         Effect.flatMap(handler),
         Effect.ignoreCause({ log: "Unhandled", message: "Unhandled error in SocketServer" }),
@@ -359,7 +358,7 @@ const makeNetServer = Effect.fnUntraced(function*(options: {
                 }
               })
           ),
-          { tlsServer: true, disableReconnects: true }
+          { tlsServer: true }
         ),
         Effect.flatMap(handler),
         Effect.ignoreCause({ log: "Unhandled", message: "Unhandled error in SocketServer" }),

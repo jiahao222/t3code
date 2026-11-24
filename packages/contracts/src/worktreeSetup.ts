@@ -1,12 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import {
-  GitRefName,
-  IsoDateTime,
-  NonNegativeInt,
-  ThreadId,
-  TrimmedNonEmptyString,
-} from "./baseSchemas.ts";
+import { IsoDateTime, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** Producers clamp free text to these before publishing so encoding never fails. */
 export const WORKTREE_SETUP_DETAIL_MAX_LENGTH = 200;
@@ -51,8 +45,8 @@ export const WorktreeSetupSnapshot = Schema.Struct({
   phase: WorktreeSetupPhase,
   startedAt: IsoDateTime,
   endedAt: Schema.NullOr(IsoDateTime),
-  branch: Schema.NullOr(GitRefName),
-  baseRef: Schema.NullOr(GitRefName),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  baseRef: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   setupScript: Schema.NullOr(
     Schema.Struct({

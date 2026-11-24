@@ -10,21 +10,13 @@ import { expect, it, vi } from "vite-plus/test";
 const mocks = vi.hoisted(() => ({ diff: vi.fn() }));
 vi.mock("../../state/pull-requests", () => ({ composerPullRequests: { diff: mocks.diff } }));
 
-import {
-  pullRequestParams,
-  usePullRequestDiff,
-  usePullRequestDiffEntry,
-} from "./usePullRequestDiff";
+import { usePullRequestDiff, usePullRequestDiffEntry } from "./usePullRequestDiff";
 import * as reviewModel from "../review/reviewModel";
 import { getCachedNativeReviewDiffData } from "../review/nativeReviewDiffAdapter";
 
-function patch(
-  path: string,
-  nextCursor: string | null = null,
-  added = "new",
-): PullRequestDiffResult {
+function patch(path: string, nextCursor: string | null = null): PullRequestDiffResult {
   return {
-    patch: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+${added}\n`,
+    patch: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`,
     truncated: false,
     nextCursor,
   };
@@ -233,7 +225,7 @@ it("retries a failed continuation without discarding loaded files or restarting 
   expect(screen.current.error).not.toBeNull();
   expect(screen.current.patch).toContain("first.ts");
 
-  act(() => screen.current.retry());
+  act(() => screen.current.refresh());
   expect(screen.requests.map((request) => request.cursor)).toEqual([null, "second", "second"]);
   expect(screen.current.patch).toContain("first.ts");
   await screen.succeed(2, patch("second.ts"));
@@ -244,67 +236,13 @@ it("retries a failed continuation without discarding loaded files or restarting 
   expect(screen.current.nextCursor).toBeNull();
 });
 
-it.each(["failed", "loaded"] as const)(
-  "reloads every page from page one after a continuation %s",
-  async (continuation) => {
-    using screen = setup();
-    await screen.succeed(0, patch("first.ts", "second"));
-    act(() => screen.current.loadMore());
-    if (continuation === "failed") await screen.fail(1);
-    else await screen.succeed(1, patch("second.ts"));
-
-    act(() => screen.current.refresh());
-    expect(screen.requests.map((request) => request.cursor)).toEqual([null, "second", null]);
-    // The page already on screen stays there while its replacement loads.
-    expect(screen.current.patch).toContain("+new");
-    expect(screen.current.patch).not.toContain("second.ts");
-    expect(screen.current.canLoadMore).toBe(false);
-    await screen.succeed(2, patch("first.ts", "second", "pushed"));
-    expect(screen.current.error).toBeNull();
-    expect(screen.current.patch).not.toContain("+new");
-
-    act(() => screen.current.loadMore());
-    expect(screen.requests.map((request) => request.cursor)).toEqual([
-      null,
-      "second",
-      null,
-      "second",
-    ]);
-    expect(screen.current.isPending).toBe(true);
-    await screen.succeed(3, patch("second.ts", null, "pushed"));
-    expect(screen.current.patch).not.toContain("+new");
-    if (screen.current.parsed.kind !== "files") throw new Error("Expected files");
-    expect(screen.current.parsed.files.map((file) => file.path)).toEqual(["first.ts", "second.ts"]);
-  },
-);
-
-it("holds further pages back until a pull to refresh has reread page one", async () => {
+it("still refreshes from page one after successfully loading a continuation", async () => {
   using screen = setup();
   await screen.succeed(0, patch("first.ts", "second"));
-
-  // The pull's refetch starts a tick later, so page one still looks settled here.
-  act(() => void screen.current.onPullRefresh());
-  expect(screen.current.patch).toContain("first.ts");
-  expect(screen.current.canLoadMore).toBe(false);
   act(() => screen.current.loadMore());
-  await act(async () => {});
-  expect(screen.requests.map((request) => request.cursor)).toEqual([null, null]);
-
-  await screen.succeed(1, patch("first.ts", "second", "pushed"));
-  expect(screen.current.patch).toContain("+pushed");
-  expect(screen.current.canLoadMore).toBe(true);
-});
-
-it("keeps only the pull request a route names", () => {
-  const pullRequest = {
-    environmentId: "environment",
-    projectId: "project",
-    repository: "owner/repo",
-    number: 1,
-    host: "git.example.com",
-    navigationUrl: "https://git.example.com/owner/repo/pull/1#discussion_r1",
-    navigationId: 2,
-  };
-  const routeParams = { ...pullRequest, commit: "abc1234", path: "src/index.ts" };
-  expect(pullRequestParams(routeParams)).toEqual(pullRequest);
+  await screen.succeed(1, patch("second.ts"));
+  act(() => screen.current.refresh());
+  await screen.succeed(2, patch("refreshed.ts"));
+  if (screen.current.parsed.kind !== "files") throw new Error("Expected files");
+  expect(screen.current.parsed.files.map((file) => file.path)).toEqual(["refreshed.ts"]);
 });

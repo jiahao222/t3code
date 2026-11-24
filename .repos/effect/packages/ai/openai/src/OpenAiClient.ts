@@ -526,11 +526,7 @@ const makeSocket = Effect.gen(function*() {
       const httpClient = Predicate.isNotUndefined(config?.transformClient)
         ? config.transformClient(client.client)
         : client.client
-      return Effect.catchTag(
-        httpClient.preprocess(HttpClientRequest.post("/responses")),
-        "HttpClientError",
-        (error) => Errors.mapHttpClientError(error, "createResponseStream")
-      )
+      return Effect.orDie(httpClient.preprocess(HttpClientRequest.post("/responses")))
     }
   )
   const makeWebSocket = yield* Socket.WebSocketConstructor
@@ -546,15 +542,11 @@ const makeSocket = Effect.gen(function*() {
     current: Turn | undefined
   }
 
-  // Reuse the connection request to avoid exchanging credentials on each turn.
-  let connectionRequest: HttpClientRequest.HttpClientRequest | undefined
-
-  const queueRef: RcRef.RcRef<SocketConnection, AiError.AiError> = yield* RcRef.make({
+  const queueRef: RcRef.RcRef<SocketConnection> = yield* RcRef.make({
     idleTimeToLive: 60_000,
     acquire: Effect.gen(function*() {
       const scope = yield* Effect.scope
       const request = yield* makeRequest
-      connectionRequest = request
       const socket = yield* Socket.makeWebSocket(request.url.replace(/^http/, "ws")).pipe(
         Effect.provideService(Socket.WebSocketConstructor, (url) =>
           makeWebSocket(url, {
@@ -602,12 +594,12 @@ const makeSocket = Effect.gen(function*() {
         if (event.type === "error") {
           const status = "status" in event ? Number(event.status) : NaN
           const error = ("error" in event ? event.error : event) as {
-            readonly type?: string | null
-            readonly code?: string | null
-            readonly message?: string
+            readonly type?: string
+            readonly code?: string
+            readonly message: string
           }
           const errorType = error.code ??
-            (error.type === "api_error" && /^gRPC error: Response with id=\S+ not found$/.test(error.message ?? "")
+            (error.type === "api_error" && /^gRPC error: Response with id=\S+ not found$/.test(error.message)
               ? "previous_response_not_found"
               : error.type ?? "unknown")
           const json = JSON.stringify(error)
@@ -684,11 +676,12 @@ const makeSocket = Effect.gen(function*() {
     })
   })
 
-  // Prime the socket; let the first response stream report preparation failures.
-  yield* Effect.ignore(Effect.scoped(RcRef.get(queueRef)))
+  // Prime the websocket
+  yield* Effect.scoped(RcRef.get(queueRef))
 
   // Websocket mode only allows one request at a time
   const semaphore = Semaphore.makeUnsafe(1)
+  const request = yield* makeRequest
 
   return OpenAiSocket.context({
     createResponseStream(options) {
@@ -717,13 +710,10 @@ const makeSocket = Effect.gen(function*() {
         return Stream.fromQueue(turn)
       }))
 
-      return Effect.map(
-        Effect.suspend(() => connectionRequest === undefined ? makeRequest : Effect.succeed(connectionRequest)),
-        (request) => [
-          HttpClientResponse.fromWeb(request, new Response()),
-          stream
-        ]
-      )
+      return Effect.succeed([
+        HttpClientResponse.fromWeb(request, new Response()),
+        stream
+      ])
     }
   }).pipe(
     Context.add(ResponseIdTracker.ResponseIdTracker, tracker)
@@ -736,14 +726,11 @@ const ErrorEvent = Schema.Struct({
   ),
   status: Schema.optionalKey(Schema.Int),
   // xAI sends `code` in place of `type`, e.g. `previous_response_not_found`
-  error: Schema.StructWithRest(
-    Schema.Struct({
-      type: Schema.optionalKey(Schema.NullOr(Schema.String)),
-      code: Schema.optionalKey(Schema.NullOr(Schema.String)),
-      message: Schema.optionalKey(Schema.String)
-    }),
-    [Schema.Record(Schema.String, Schema.Unknown)]
-  )
+  error: Schema.Struct({
+    type: Schema.optional(Schema.String),
+    code: Schema.optional(Schema.String),
+    message: Schema.String
+  })
 })
 
 const errorTypeToStatus: Record<string, number> = {
@@ -774,8 +761,7 @@ const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(AllEvents))
  * - `BunSocket.layerWebSocketConstructor`
  *
  * These constructor layers support the non-standard options needed to set the
- * Authorization header. The header is resolved each time a socket connects, and
- * the socket keeps it until it closes.
+ * Authorization header.
  *
  * @see {@link layerWebSocketMode} for providing WebSocket mode through a layer
  * @see {@link OpenAiSocket} for direct access to the WebSocket-backed streaming service
@@ -815,8 +801,7 @@ export const withWebSocketMode = <A, E, R>(
  * - `BunSocket.layerWebSocketConstructor`
  *
  * These constructor layers support the non-standard options needed to set the
- * Authorization header. The header is resolved each time a socket connects, and
- * the socket keeps it until it closes.
+ * Authorization header.
  *
  * @see {@link withWebSocketMode} for enabling WebSocket mode around a single effect
  *

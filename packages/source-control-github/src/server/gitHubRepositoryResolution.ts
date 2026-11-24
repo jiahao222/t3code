@@ -166,9 +166,7 @@ function apiHostForSshAlias(host: string): string | null | undefined {
 export function gitHubApiHostForRemote(remoteUrl: string): string | null {
   const remote = parseGitRemoteHost(remoteUrl);
   if (remote === null) return null;
-  const parsed = URL.parse(`https://${remote.host}`);
-  if (parsed === null) return null;
-  const host = parsed.host.toLowerCase();
+  const host = new URL(`https://${remote.host}`).host.toLowerCase();
   if (isSshRemoteUrl(remoteUrl)) {
     const aliased = apiHostForSshAlias(host);
     if (aliased !== undefined) return aliased;

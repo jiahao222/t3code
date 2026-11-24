@@ -1,6 +1,7 @@
 import type { PreparedConnection } from "@t3tools/client-runtime/connection";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { markdownTree } from "~/markdown/wordsHast";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { render } from "../../../test/render";
@@ -90,13 +91,9 @@ describe("markdownImageCopy", () => {
   it("copies an image whose path has a space as Markdown that is still that image", () => {
     // Raw HTML <img> and <picture> sources reach the copy with the space unencoded.
     const copied = markdownImageCopy("Shot", "/work/my shot.png", undefined);
-    const [block] = markdownTree(copied).children;
+    const [block] = unified().use(remarkParse).parse(copied).children;
     const images =
-      block?.type === "element" && block.tagName === "p"
-        ? block.children.filter((node) => node.type === "element" && node.tagName === "img")
-        : [];
-    expect(
-      images.map((image) => image.type === "element" && decodeURI(String(image.properties.src))),
-    ).toEqual(["/work/my shot.png"]);
+      block?.type === "paragraph" ? block.children.filter((node) => node.type === "image") : [];
+    expect(images.map((image) => decodeURI(image.url))).toEqual(["/work/my shot.png"]);
   });
 });

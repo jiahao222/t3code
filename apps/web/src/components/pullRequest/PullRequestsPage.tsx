@@ -35,7 +35,6 @@ import {
   mergePullRequestDiffStats,
   pullRequestDiffStatKey,
   pullRequestEntryKey,
-  pullRequestListAnsweredEmpty,
   rankPullRequestMatches,
   pullRequestStatsRefreshBatches,
   pullRequestStatsRequestBatches,
@@ -415,7 +414,11 @@ export function PullRequestsPage() {
     listQuery.observations,
   );
   if (observedHosts !== hostReads) setHostReads(observedHosts);
-  const baselineEmpty = pullRequestListAnsweredEmpty(baselineQuery);
+  const baselineEmpty =
+    baselineQuery.data?.entries.length === 0 &&
+    baselineQuery.data.errors.length === 0 &&
+    !baselineQuery.isPending &&
+    baselineQuery.error === null;
   const facetTargets = (() => {
     if (!filtersOpen) return NO_LIST_TARGETS;
     return environmentQueries.map(({ environmentId, projectIds }) => ({
@@ -1266,7 +1269,7 @@ export function PullRequestsPage() {
         <PullRequestsUnavailableState
           error={listError}
           refreshing={listQuery.isPending}
-          onRetry={listQuery.retry}
+          onRetry={() => listQuery.refresh()}
         />
       ) : carriedToNothing ? (
         <PullRequestListGhost rows={7} />
@@ -1310,7 +1313,7 @@ export function PullRequestsPage() {
       {listError && shownCount > 0 ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-surface px-3 py-2 text-xs">
           <span>{gt("{error} Showing the last pull requests loaded.", { error: listError })}</span>
-          <Button size="xs" variant="outline" onClick={listQuery.retry}>
+          <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
             <T>Retry</T>
           </Button>
         </div>

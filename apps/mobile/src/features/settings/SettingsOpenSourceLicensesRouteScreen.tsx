@@ -12,8 +12,7 @@ import {
   type ThirdPartyLicenseEntry,
 } from "@t3tools/shared/thirdPartyLicenses";
 import { useMemo, useState } from "react";
-import { Platform, Pressable, View } from "react-native";
-import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { Linking, Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -160,7 +159,7 @@ export function SettingsOpenSourceLicenseRouteScreen({ route }: LicenseDetailPro
             <Pressable
               accessibilityHint={gt("Opens the project website")}
               accessibilityRole="link"
-              onPress={() => void tryOpenExternalUrl(sourceUrl)}
+              onPress={() => void Linking.openURL(sourceUrl)}
               className="min-h-12 flex-row items-center gap-2 self-start py-2 active:opacity-60"
             >
               <Text className="font-t3-medium text-primary-text">

@@ -1,12 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { GitRefName, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** Uses the managed worktree folder; handoff detaches the provider, ending this turn and resuming there next run. */
 export const WorktreeMcpHandoffInput = Schema.Struct({
-  branch: GitRefName,
+  branch: TrimmedNonEmptyString,
   baseRef: Schema.optional(
-    GitRefName.annotate({
+    TrimmedNonEmptyString.annotate({
       description: "Default: checked-out branch.",
     }),
   ),
@@ -65,8 +65,8 @@ export type WorktreeMcpContinuationStatus = typeof WorktreeMcpContinuationStatus
 
 export const WorktreeMcpHandoffResult = Schema.Struct({
   worktreePath: TrimmedNonEmptyString,
-  branch: GitRefName,
-  baseRef: GitRefName,
+  branch: TrimmedNonEmptyString,
+  baseRef: TrimmedNonEmptyString,
   startedFromOrigin: Schema.Boolean,
   setupScript: WorktreeMcpSetupScriptStatus,
   continuation: WorktreeMcpContinuationStatus,
@@ -77,7 +77,7 @@ export type WorktreeMcpHandoffResult = typeof WorktreeMcpHandoffResult.Type;
 export const WorktreeMcpStatusResult = Schema.Struct({
   attached: Schema.Boolean,
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
-  branch: Schema.NullOr(GitRefName),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
   projectWorkspaceRoot: TrimmedNonEmptyString,
   defaultStartFromOrigin: Schema.Boolean.annotate({
     description: "`startFromOrigin` default for `t3_worktree_handoff`.",

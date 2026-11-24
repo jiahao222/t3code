@@ -14,8 +14,7 @@ import {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useRef, useState } from "react";
-import { Pressable, ScrollView, TextInput, useWindowDimensions, View } from "react-native";
-import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { Linking, Pressable, ScrollView, TextInput, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { m } from "../../i18n/messages";
 
@@ -370,9 +369,9 @@ function ProviderAccount({
       variant="pill"
       label={gt("Docs")}
       onPress={() => {
-        void tryOpenExternalUrl(provider.setup!.documentationUrl!).then((opened) => {
-          if (!opened) setError(gt("Could not open the provider docs."));
-        });
+        void Linking.openURL(provider.setup!.documentationUrl!).catch(() =>
+          setError(gt("Could not open the provider docs.")),
+        );
       }}
     />
   ) : active && state?.flowId ? (
@@ -531,8 +530,7 @@ function ProviderAccount({
                 !(await send({ type: "browser", action: "accept" }))
               )
                 return;
-              if (!(await tryOpenExternalUrl(url, "provider-auth")))
-                setError(gt("Could not open the sign-in page."));
+              await Linking.openURL(url);
             })().catch(() => setError(gt("Could not open the sign-in page.")));
           }}
         />

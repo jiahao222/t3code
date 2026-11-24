@@ -8,16 +8,12 @@ import {
   EnvironmentHttpApi,
   type EnvironmentSpeechModels,
   EnvironmentVoiceBodyLimit,
-  requiredScopesForServerSettingsPatch,
   SPEECH_MAX_OPTIONS_BYTES,
-  TextGenerationError,
 } from "@t3tools/contracts";
 import * as ByteSize from "effect/ByteSize";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
-import * as Schema from "effect/Schema";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
@@ -33,7 +29,6 @@ import * as SpeechService from "./SpeechService.ts";
 
 const MAX_TRANSCRIBE_BODY_BYTES = SpeechService.MAX_SPEECH_BYTES + SPEECH_MAX_OPTIONS_BYTES + 4;
 const parseAudio = Option.liftThrowable(decodeSpeechPcmRequest);
-const isTextGenerationError = Schema.is(TextGenerationError);
 
 const bodyLimit = Layer.succeed(EnvironmentVoiceBodyLimit, (effect) =>
   Effect.gen(function* () {
@@ -104,14 +99,6 @@ export const speechHttpApiLayer = HttpApiBuilder.group(
         "setCloudKey",
         Effect.fn("environment.voice.setCloudKey")(function* (args) {
           yield* guard(args.endpoint.name, AuthSettingsWriteScope);
-          // The key is a setting, so saving it needs what the same settings patch would.
-          const { key } = args.payload;
-          const value = key === null || Redacted.isRedacted(key) ? "" : key;
-          for (const scope of requiredScopesForServerSettingsPatch({
-            cloudSpeechCredentials: { [args.params.provider]: value },
-          })) {
-            yield* requireEnvironmentScope(scope);
-          }
           yield* cloud
             .setKey(args.params.provider, args.payload.key)
             .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
@@ -246,15 +233,7 @@ export const speechHttpApiLayer = HttpApiBuilder.group(
           yield* guard(args.endpoint.name);
           return yield* postProcessing
             .process(args.payload)
-            .pipe(
-              Effect.catch((error) =>
-                failEnvironmentInternal(
-                  "internal_error",
-                  error,
-                  isTextGenerationError(error.cause) ? error.cause.detail : undefined,
-                ),
-              ),
-            );
+            .pipe(Effect.catch((error) => failEnvironmentInternal("internal_error", error)));
         }),
       );
   }),

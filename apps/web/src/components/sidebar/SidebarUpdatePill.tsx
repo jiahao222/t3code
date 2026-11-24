@@ -22,7 +22,6 @@ import {
   getDesktopUpdateDownloadedVersion,
   getDesktopUpdateIdleTooltip,
   getDesktopUpdateInstallConfirmationMessage,
-  installDesktopUpdate,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
@@ -177,7 +176,7 @@ export async function installLocalUpdate(
   expectedVersion?: string,
 ): Promise<boolean> {
   try {
-    const result = await installDesktopUpdate(bridge, expectedVersion);
+    const result = await bridge.installUpdate(expectedVersion);
     if (!result.accepted) {
       showDesktopUpdateDownloadedToast(bridge, result.state);
       return false;
@@ -445,7 +444,6 @@ function SidebarUpdateControl() {
       <SidebarMenuItem className="@container/sidebar-update ml-auto flex min-w-8 flex-1">
         <SidebarUpdateCapsule
           run={run}
-          current={everything.machines}
           local={local}
           icon={statusIcon}
           {...(run.localVersion === null && action === "install" && window.desktopBridge

@@ -166,6 +166,7 @@ export function useUsage(
     resolution: input.resolution,
     sinceTime: input.sinceTime,
     untilTime: input.untilTime,
+    includeRequests: input.includeRequests,
   });
   const atom = usageByWindowAtom(windowKey);
   const environments = useAtomValue(atom);

@@ -55,7 +55,8 @@ export default function Spreadsheet(props: {
 }) {
   const { onError, bytes: source, onDetails, view } = props;
   const gt = useGT();
-  const [preview, setPreview] = useState<{ opened: Opened; error?: string }>();
+  const [opened, setOpened] = useState<Opened>();
+  const [error, setError] = useState("");
   const picking = useRef<AbortController | null>(null);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Open the workbook worker and cancel workbook and sheet requests when the source changes or unmounts.
   useEffect(() => {
@@ -74,7 +75,7 @@ export default function Spreadsheet(props: {
       .call("open", { bytes, view }, { transfer: [bytes], signal: controller.signal })
       .then((value) => {
         if (!value) throw new Error(m(msg("This workbook has no visible sheets.")));
-        setPreview({ opened: { ...value, engine } });
+        setOpened({ ...value, engine });
         onDetails(
           m(
             msg("{count, plural, one {{count} sheet} other {{count} sheets}}", {
@@ -91,26 +92,22 @@ export default function Spreadsheet(props: {
     };
   }, [source, view, onDetails, onError]);
   const show = (sheet: number, target?: CellAddr) => {
-    if (!preview) return;
-    const { opened } = preview;
+    if (!opened) return;
     picking.current?.abort();
-    // The previous reply may have queued a state update that React has yet to commit.
-    setPreview(preview);
     if (sheet === opened.layout.info.activeSheet) return;
     const controller = new AbortController();
     picking.current = controller;
     void opened.engine
       .call("show", { sheet }, { signal: controller.signal })
       .then((layout) => {
-        if (!controller.signal.aborted) setPreview({ opened: { ...opened, layout, target } });
+        setError("");
+        setOpened({ ...opened, layout, target });
       })
       .catch(() => {
-        if (!controller.signal.aborted)
-          setPreview({ opened, error: m(msg("This sheet could not be opened.")) });
+        if (!controller.signal.aborted) setError(m(msg("This sheet could not be opened.")));
       });
   };
-  if (!preview) return <FileSurfaceLoading />;
-  const { opened, error } = preview;
+  if (!opened) return <FileSurfaceLoading />;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {error ? <FileSurfaceNotice>{error}</FileSurfaceNotice> : null}
@@ -129,9 +126,9 @@ export default function Spreadsheet(props: {
         aria-label={gt("Sheets")}
         className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-t border-border px-2"
         onKeyDown={(event) => {
-          // Focus moves before the worker confirms the selected sheet.
-          const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-          const current = Array.from(buttons).findIndex((button) => button === event.target);
+          const current = opened.tabs.findIndex(
+            (tab) => tab.index === opened.layout.info.activeSheet,
+          );
           const next =
             event.key === "ArrowRight"
               ? (current + 1) % opened.tabs.length
@@ -146,7 +143,7 @@ export default function Spreadsheet(props: {
           event.preventDefault();
           const tab = opened.tabs[next];
           if (tab) show(tab.index);
-          buttons[next]?.focus();
+          event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
         }}
       >
         {opened.tabs.map((tab) => (
@@ -641,11 +638,8 @@ function SpreadsheetGrid(props: {
         });
     };
     const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && (resizing || event.repeat)) {
+      if (event.key === "Escape" && resizing) {
         event.preventDefault();
-        event.stopPropagation();
-        if (!resizing) return;
-        root.releasePointerCapture(resizing.pointerId);
         resizing = undefined;
         root.style.cursor = "";
         schedule();
@@ -733,8 +727,7 @@ function SpreadsheetGrid(props: {
         aria-rowcount={lastCell.row + 1}
         aria-colcount={lastCell.col + 1}
         aria-activedescendant={`office-cell-${active.row}-${active.col}`}
-        // The sheet is white in every theme, so its scrollbars keep the light theme's thumb.
-        className="relative min-h-0 min-w-0 flex-1 select-none overflow-auto bg-white scheme-light outline-none [--app-scrollbar-thumb-hover:rgb(191_191_191)] [--app-scrollbar-thumb:rgb(217_217_217)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="relative min-h-0 min-w-0 flex-1 select-none overflow-auto bg-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
         <div
           ref={spacer}

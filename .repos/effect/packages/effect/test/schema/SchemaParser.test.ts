@@ -23,6 +23,7 @@ import {
   strictEqual,
   throws
 } from "../utils/assert.ts"
+
 describe("SchemaParser", () => {
   describe("synchronous root callback defects", () => {
     const defect = new Error("callback defect")
@@ -562,29 +563,11 @@ describe("SchemaParser", () => {
       assertTrue(Object.hasOwn(output, "_tag"))
     })
 
-    it("requires Object.prototype field names to be own properties", () => {
-      const schema = Schema.Struct({
-        constructor: Schema.optionalKey(Schema.String),
-        toString: Schema.optional(Schema.String),
-        valueOf: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed("default")))
-      })
-      // TypeScript sees inherited members, so compare these runtime results as unknown.
-      deepStrictEqual<unknown>(SchemaParser.decodeUnknownSync(schema)({}), { valueOf: "default" })
-      deepStrictEqual<unknown>(SchemaParser.decodeUnknownSync(schema)(Object.create({ constructor: "inherited" })), {
-        valueOf: "default"
-      })
-      const encodingInput = { constructor: "own", valueOf: "default" }
-      deepStrictEqual<unknown>(SchemaParser.encodeUnknownSync(schema)(encodingInput), encodingInput)
-      assertFalse(SchemaParser.is(schema)({}))
-      assertTrue(SchemaParser.is(schema)({ valueOf: "default" }))
-      const own = { constructor: "own", toString: "own", valueOf: "own" }
-      deepStrictEqual(SchemaParser.decodeUnknownSync(schema)(own), own)
-    })
+    it("decodes inherited Object.prototype properties", () => {
+      const output = SchemaParser.decodeUnknownSync(Schema.Struct({ toString: Schema.Unknown }))({})
 
-    it("reports a missing required Object.prototype field", () => {
-      throws(() => SchemaParser.decodeUnknownSync(Schema.Struct({ toString: Schema.String }))({}), (error) => {
-        assertSchemaIssueError(error, `Missing key\n  at ["toString"]`)
-      })
+      strictEqual(output.toString, Object.prototype.toString)
+      assertTrue(Object.hasOwn(output, "toString"))
     })
 
     it("requires __proto__ to be an own property", () => {

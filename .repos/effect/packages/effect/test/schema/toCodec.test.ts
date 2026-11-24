@@ -1984,8 +1984,6 @@ describe("Serializers", () => {
           const asserts = new TestSchema.Asserts(Schema.toCodecStringTree(schema))
 
           const encoding = asserts.encoding()
-          await encoding.succeed(0, "0")
-          await encoding.succeed(-0, "-0")
           await encoding.succeed(1, "1")
           await encoding.succeed(-1, "-1")
           await encoding.succeed(1.2, "1.2")
@@ -1994,8 +1992,6 @@ describe("Serializers", () => {
           await encoding.succeed(NaN, "NaN")
 
           const decoding = asserts.decoding()
-          await decoding.succeed("0", 0)
-          await decoding.succeed("-0", -0)
           await decoding.succeed("1", 1)
           await decoding.succeed("-1", -1)
           await decoding.succeed("1.2", 1.2)
@@ -2019,8 +2015,6 @@ Expected "Infinity" | "-Infinity" | "NaN"`
             const asserts = new TestSchema.Asserts(Schema.toCodecStringTree(schema))
 
             const encoding = asserts.encoding()
-            await encoding.succeed(0, "0")
-            await encoding.succeed(-0, "-0")
             await encoding.succeed(1, "1")
             await encoding.succeed(-1, "-1")
             await encoding.succeed(1.2, "1.2")
@@ -2029,8 +2023,6 @@ Expected "Infinity" | "-Infinity" | "NaN"`
             await encoding.fail(NaN, "Expected a finite number")
 
             const decoding = asserts.decoding()
-            await decoding.succeed("0", 0)
-            await decoding.succeed("-0", -0)
             await decoding.succeed("1", 1)
             await decoding.succeed("-1", -1)
             await decoding.succeed("1.2", 1.2)

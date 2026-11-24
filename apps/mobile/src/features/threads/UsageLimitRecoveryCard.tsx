@@ -14,8 +14,7 @@ import * as Clipboard from "expo-clipboard";
 import { T, useGT } from "gt-react-native";
 import { m } from "../../i18n/messages";
 import { useState } from "react";
-import { Pressable, View } from "react-native";
-import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { Linking, Pressable, View } from "react-native";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useDeadlinePassed } from "../../lib/clock";
@@ -51,7 +50,6 @@ export function UsageLimitRecoveryCard({
     Date.parse(thread.snoozedUntil) > Date.parse(resetAt)
       ? thread.snoozedUntil
       : resetAt;
-  const displayPassed = useDeadlinePassed(displayAt === null ? null : Date.parse(displayAt));
   const [copied, setCopied] = useState(false);
   const [actionPending, setActionPending] = useState(false);
   const code = thread.runtime?.lastErrorCode;
@@ -65,25 +63,21 @@ export function UsageLimitRecoveryCard({
     !runId
   )
     return null;
-  const resumes = canSchedule && scheduled;
-  const resumesUpcoming = resumes && !displayPassed;
-  const shownAt = resumesUpcoming ? displayAt : resetAt;
-  const resetDate = shownAt
-    ? new Date(shownAt).toLocaleString(undefined, {
+  const resetDate = displayAt
+    ? new Date(displayAt).toLocaleString(undefined, {
         month: "short",
         day: "numeric",
         hour: "numeric",
         minute: "2-digit",
       })
     : null;
+  const resumes = canSchedule && scheduled;
   const resetText =
     resetDate === null
       ? null
-      : resumesUpcoming
+      : resumes
         ? gt("Resumes {date}.", { date: resetDate })
-        : resetPassed
-          ? gt("Reset {date}.", { date: resetDate })
-          : gt("Resets {date}.", { date: resetDate });
+        : gt("Resets {date}.", { date: resetDate });
   const snoozed =
     limitRecoveryOwnsSnooze({
       runId,
@@ -138,11 +132,10 @@ export function UsageLimitRecoveryCard({
         run: () => {
           setError(null);
           setActionPending(true);
-          void tryOpenExternalUrl(CHATGPT_USAGE_URL)
-            .then((opened) => {
-              if (!opened)
-                setError(gt("Could not open ChatGPT. Go to chatgpt.com → Settings → Usage."));
-            })
+          void Linking.openURL(CHATGPT_USAGE_URL)
+            .catch(() =>
+              setError(gt("Could not open ChatGPT. Go to chatgpt.com → Settings → Usage.")),
+            )
             .finally(() => setActionPending(false));
         },
       };
@@ -176,11 +169,9 @@ export function UsageLimitRecoveryCard({
             : chatGptLimit
               ? (resetText ?? gt("Review your usage settings in ChatGPT."))
               : resetDate !== null
-                ? resumesUpcoming
+                ? resumes
                   ? gt("Usage limit reached. Resumes {date}.", { date: resetDate })
-                  : resetPassed
-                    ? gt("Usage limit reached. Reset {date}.", { date: resetDate })
-                    : gt("Usage limit reached. Resets {date}.", { date: resetDate })
+                  : gt("Usage limit reached. Resets {date}.", { date: resetDate })
                 : gt(
                     "Usage limit reached. The provider did not report a reset time. Retry manually when your limit is available.",
                   )}
@@ -199,13 +190,7 @@ export function UsageLimitRecoveryCard({
             {canSchedule ? (
               <>
                 <RecoveryAction
-                  label={
-                    scheduled
-                      ? gt("Cancel auto-resume")
-                      : resetPassed
-                        ? gt("Resume now")
-                        : gt("Resume at reset")
-                  }
+                  label={scheduled ? gt("Cancel auto-resume") : gt("Resume at reset")}
                   disabled={pending}
                   onPress={() => void toggle("resume")}
                 />

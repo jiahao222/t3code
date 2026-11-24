@@ -49,11 +49,7 @@ export class TranscriptJsonLimitError extends Schema.TaggedError<TranscriptJsonL
 export function createTranscriptJsonReader(
   reserve: (bytes: number) => void,
   selectPath: (path: JsonPath) => boolean,
-  options?: {
-    readonly maxDepth?: number;
-    // Reports each selected top-level string field as soon as it ends, before the record does.
-    readonly onTopLevelString?: (key: string, value: string) => void;
-  },
+  options?: { readonly maxDepth?: number },
 ) {
   // 3.6.0 omits the synchronous tokenizer from types; parser() adds an unnecessary async generator.
   const { jsonParser } = StreamJson as typeof StreamJson & {
@@ -137,13 +133,7 @@ export function createTranscriptJsonReader(
         return;
       case "endString":
       case "endNumber":
-        if (selectedValue) {
-          const parent = stack[0];
-          if (token.name === "endString" && stack.length === 1 && typeof parent?.key === "string") {
-            options?.onTopLevelString?.(parent.key, value);
-          }
-          assemble(token);
-        }
+        if (selectedValue) assemble(token);
         endValue();
         return;
       case "nullValue":

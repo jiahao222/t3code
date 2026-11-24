@@ -81,14 +81,10 @@ const makeStorage = Effect.fnUntraced(function*(options: {
   // id of vtgate's lock connection for the session, which vtgate replaces
   // once the session releases all of its locks. A lock of the session's own
   // pins that connection and reads its id.
-  // Keep MySQL advisory-lock statements unprepared: vtgate fetches fields
-  // during prepare through its regular query path, which can start an async
-  // lock heartbeat. Executing the statement then races that heartbeat on the
-  // same tablet connection (ER_QUERY_INTERRUPTED: transaction in use).
   const pinLockSession = Effect.fnUntraced(function*(conn: Connection, pinLock?: string) {
     while (true) {
       const name = pinLock ?? `cluster:pid:${(Math.random() * Number.MAX_SAFE_INTEGER) | 0}`
-      const taken = (yield* conn.executeValuesUnprepared(
+      const taken = (yield* conn.executeValues(
         `SELECT GET_LOCK('${name}', 10), IS_USED_LOCK('${name}')`,
         []
       ))[0] as [1 | null, number]
@@ -149,7 +145,7 @@ const makeStorage = Effect.fnUntraced(function*(options: {
         // borrowed, even if setup fails below.
         const borrowedWaitTimeout = Number((yield* conn.executeValues("SELECT @@SESSION.wait_timeout", []))[0][0])
         yield* Scope.addFinalizerExit(scope, () =>
-          conn.executeValuesUnprepared("SELECT RELEASE_ALL_LOCKS()", []).pipe(
+          conn.executeRaw("SELECT RELEASE_ALL_LOCKS()", []).pipe(
             Effect.andThen(conn.executeRaw(`SET SESSION wait_timeout = ${borrowedWaitTimeout}`, [])),
             Effect.timeout(lockOperationInterval),
             Effect.interruptible,
@@ -333,9 +329,7 @@ const makeStorage = Effect.fnUntraced(function*(options: {
   })
 
   const mysqlHeldLocks = Effect.fnUntraced(function*(conn: Connection, pid: number, shardIds: ReadonlyArray<string>) {
-    const takenLocks = (yield* conn.executeValuesUnprepared(`SELECT ${allMySqlTakenLocks}`, []))[0] as Array<
-      number | null
-    >
+    const takenLocks = (yield* conn.executeValues(`SELECT ${allMySqlTakenLocks}`, []))[0] as Array<number | null>
     const held: Array<string> = []
     const notHeld: Array<string> = []
     for (let i = 0; i < shardIds.length; i++) {
@@ -411,9 +405,7 @@ const makeStorage = Effect.fnUntraced(function*(options: {
           if (toAcquire.length === 0) {
             return acquiredShardIds
           }
-          const results = (yield* conn.executeValuesUnprepared(`SELECT ${mysqlLocks(toAcquire)}`, []))[0] as Array<
-            number
-          >
+          const results = (yield* conn.executeValues(`SELECT ${mysqlLocks(toAcquire)}`, []))[0] as Array<number>
           for (let i = 0; i < results.length; i++) {
             if (results[i] === 1) {
               acquiredShardIds.push(toAcquire[i])
@@ -621,8 +613,8 @@ const makeStorage = Effect.fnUntraced(function*(options: {
         useLockConn(Effect.fnUntraced(function*(conn, pid) {
           const lockName = lockNames.get(shardId)!
           while (true) {
-            yield* conn.executeValuesUnprepared(`SELECT RELEASE_LOCK('${lockName}')`, [])
-            const takenLocks = yield* conn.executeValuesUnprepared(
+            yield* conn.executeRaw(`SELECT RELEASE_LOCK('${lockName}')`, [])
+            const takenLocks = yield* conn.executeValues(
               `SELECT IS_USED_LOCK('${lockName}')`,
               []
             )
@@ -648,7 +640,7 @@ const makeStorage = Effect.fnUntraced(function*(options: {
       disableAdvisoryLocks
         ? sql`DELETE FROM ${locksTableSql} WHERE address = ${address}`.pipe(execWithLockConn)
         : useLockConn(Effect.fnUntraced(function*(conn, _pid, session) {
-          yield* conn.executeValuesUnprepared("SELECT RELEASE_ALL_LOCKS()", [])
+          yield* conn.executeRaw("SELECT RELEASE_ALL_LOCKS()", [])
           // Releasing every lock also releases the pin, so take it again.
           const pinned = yield* pinLockSession(conn, session.pinLock)
           session.pid = pinned.pid
@@ -713,12 +705,7 @@ const makeStorage = Effect.fnUntraced(function*(options: {
       }
       return withLockOperationDeadline(
         heartbeat.pipe(
-          // Ordinary queries can start vtgate's asynchronous lock heartbeat.
-          // Keep them off the MySQL advisory-lock session as well.
-          sql.onDialectOrElse({
-            mysql: () => disableAdvisoryLocks ? execWithLockConn : (effect: typeof heartbeat) => effect,
-            orElse: () => execWithLockConn
-          }),
+          execWithLockConn,
           Effect.andThen(refreshShards(address, shardIds))
         )
       ).pipe(

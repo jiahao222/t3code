@@ -8,16 +8,13 @@ import { useBranches } from "./queries";
 import { useEnvironmentQuery } from "./query";
 import { sourceControlEnvironment } from "./sourceControl";
 import { useVcsActionState } from "./use-vcs-action-state";
-import type { GitRepositoryTarget } from "./thread-git-target";
 import { useThreadSelection } from "./use-thread-selection";
 import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
 
-/** Git state for the selected thread's own folder, or for `repository` when given. */
-export function useSelectedThreadGitState(repository?: GitRepositoryTarget) {
+export function useSelectedThreadGitState() {
   const messages = useMessages();
   const { selectedThread } = useThreadSelection();
-  const threadWorktree = useSelectedThreadWorktree();
-  const selectedThreadCwd = repository?.cwd ?? threadWorktree.selectedThreadCwd;
+  const { selectedThreadCwd } = useSelectedThreadWorktree();
 
   const selectedThreadGitTarget = {
     environmentId: selectedThread?.environmentId ?? null,

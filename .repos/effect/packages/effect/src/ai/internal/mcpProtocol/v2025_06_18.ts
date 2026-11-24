@@ -183,13 +183,13 @@ export const protocol = McpProtocol.make({
         ),
       "notifications/roots/list_changed": (_, { client, headers }) =>
         lifecycle.clientNotification(McpCore.ClientNotification.RootsChanged(), client.id, headers),
-      "resources/list": (pageRequest) =>
-        McpProtocol.listForClient(core.resources.list, pageRequest?.cursor)
+      "resources/list": (_pageRequest) =>
+        McpProtocol.listForClient(core.resources.list)
           .pipe(
             Effect.map((resources) => McpSchema.ListResourcesResult.make({ resources }))
           ),
-      "resources/templates/list": (pageRequest) =>
-        McpProtocol.listForClient(core.resources.listTemplates, pageRequest?.cursor).pipe(
+      "resources/templates/list": (_pageRequest) =>
+        McpProtocol.listForClient(core.resources.listTemplates).pipe(
           Effect.map((resourceTemplates) => McpSchema.ListResourceTemplatesResult.make({ resourceTemplates }))
         ),
       "resources/read": Effect.fnUntraced(function*({ uri }) {
@@ -206,8 +206,8 @@ export const protocol = McpProtocol.make({
         lifecycle.subscribe(uri, client.id, headers).pipe(Effect.as({})),
       "resources/unsubscribe": ({ uri }, { client, headers }) =>
         lifecycle.unsubscribe(uri, client.id, headers).pipe(Effect.as({})),
-      "prompts/list": (pageRequest) =>
-        McpProtocol.listForClient(core.prompts.list, pageRequest?.cursor)
+      "prompts/list": (_pageRequest) =>
+        McpProtocol.listForClient(core.prompts.list)
           .pipe(
             Effect.map((prompts) => McpSchema.ListPromptsResult.make({ prompts }))
           ),
@@ -261,8 +261,8 @@ export const protocol = McpProtocol.make({
           _meta: result.metadata
         })
       }),
-      "tools/list": Effect.fnUntraced(function*(pageRequest) {
-        const tools = yield* McpProtocol.listForClient(core.tools.list, pageRequest?.cursor)
+      "tools/list": Effect.fnUntraced(function*() {
+        const tools = yield* McpProtocol.listForClient(core.tools.list)
         return McpSchema.ListToolsResult.make({
           tools: tools.map((tool) =>
             McpSchema.Tool.make({

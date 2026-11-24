@@ -4,8 +4,7 @@ import type {
   UserInputAttachments,
 } from "@t3tools/contracts";
 import { Image } from "expo-image";
-import { Pressable, View } from "react-native";
-import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { Linking, Pressable, View } from "react-native";
 import { getQuestionAnswerText } from "@t3tools/client-runtime/work-log/user-input";
 import { AppText as Text } from "../../components/ui/AppText";
 import { assetImageSource } from "../../lib/assetImageSource";
@@ -23,7 +22,7 @@ function AnswerFile(props: {
       accessibilityLabel={props.attachment.name}
       disabled={!url}
       onPress={() => {
-        if (url) void tryOpenExternalUrl(url);
+        if (url) void Linking.openURL(url);
       }}
       className="gap-1"
     >

@@ -4,8 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadlinePromises from "node:readline/promises";
 
-import * as HostProcess from "@t3tools/shared/HostProcess";
-import { isCommandAvailable, resolveCommandPath, resolveSpawnCommand } from "@t3tools/shared/shell";
+import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
@@ -86,17 +85,6 @@ export class TriageAgentSpawnError extends Schema.TaggedError<TriageAgentSpawnEr
   }
 }
 
-export const matchAgentAnswer = <Agent extends { readonly id: string }>(
-  agents: ReadonlyArray<Agent>,
-  answer: string,
-) => {
-  const trimmed = answer.trim();
-  return (
-    agents.find((_, index) => String(index + 1) === trimmed) ??
-    agents.find((agent) => agent.id === trimmed.toLowerCase())
-  );
-};
-
 const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
   Effect.promise(async () => {
     const readline = NodeReadlinePromises.createInterface({
@@ -108,10 +96,14 @@ const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
         .map((agent, index) => `  [${String(index + 1)}] ${agent.label}`)
         .join("\n");
       for (;;) {
-        const answer = await readline.question(`Run triage with:\n${menu}\n> `);
-        const picked = matchAgentAnswer(agents, answer);
-        if (picked !== undefined) {
-          return picked;
+        const answer = (await readline.question(`Run triage with:\n${menu}\n> `)).trim();
+        const byNumber = agents[Number.parseInt(answer, 10) - 1];
+        if (byNumber !== undefined) {
+          return byNumber;
+        }
+        const byId = agents.find((agent) => agent.id === answer.toLowerCase());
+        if (byId !== undefined) {
+          return byId;
         }
       }
     } finally {
@@ -228,14 +220,7 @@ export const triageCommand = Command.make("triage", {
 
       const model = Option.getOrUndefined(flags.model);
       const launchPrompt = buildTriageLaunchPrompt(promptFilePath);
-      // The agent starts in the session directory, so a PATH match relative to this one would
-      // be searched from there. Windows keeps the bare name for its .cmd shim handling.
-      const onPath =
-        (yield* HostProcess.Platform) === "win32"
-          ? null
-          : yield* resolveCommandPath(selected.command);
-      const command = onPath === null ? selected.command : NodePath.resolve(onPath);
-      const spawnSpec = yield* resolveSpawnCommand(command, [
+      const spawnSpec = yield* resolveSpawnCommand(selected.command, [
         ...(model === undefined ? [] : ["--model", model]),
         ...(selected.promptArgs ?? []),
         launchPrompt,

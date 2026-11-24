@@ -22,8 +22,7 @@ import { formatDuration, limitsNotice, resetCreditChoices } from "@t3tools/share
 import { msg, T, useGT, useMessages, Var } from "gt-react-native";
 import { type ReactNode, useContext, useRef, useState } from "react";
 import { Atom } from "effect/reactivity";
-import { Pressable, View } from "react-native";
-import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
+import { Linking, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { ProviderIcon } from "../../components/ProviderIcon";
@@ -225,7 +224,7 @@ export function AccountLimits(props: {
         <Pressable
           accessibilityRole="link"
           className="min-h-11 justify-center"
-          onPress={() => void tryOpenExternalUrl(externalUsage.url)}
+          onPress={() => void Linking.openURL(externalUsage.url).catch(() => undefined)}
         >
           <Text className="text-sm font-t3-medium text-primary">
             <T>Manage usage</T>

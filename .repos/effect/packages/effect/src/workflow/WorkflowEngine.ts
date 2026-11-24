@@ -23,7 +23,6 @@ import * as Option from "../Option.ts"
 import * as Schedule from "../Schedule.ts"
 import * as Schema from "../Schema.ts"
 import * as Scope from "../Scope.ts"
-import * as Semaphore from "../Semaphore.ts"
 import type * as Activity from "./Activity.ts"
 import type { DurableClock } from "./DurableClock.ts"
 import type * as DurableDeferred from "./DurableDeferred.ts"
@@ -760,7 +759,7 @@ export const layerMemory: Layer.Layer<WorkflowEngine> = Layer.effect(WorkflowEng
       // Parent of every run's scope. Scopes of runs that suspended stay open
       // under it, so their finalizers and resources last until the execution
       // finishes.
-      scope: Scope.Closeable
+      readonly scope: Scope.Closeable
     }
     const executions = new Map<string, ExecutionState>()
 
@@ -771,14 +770,7 @@ export const layerMemory: Layer.Layer<WorkflowEngine> = Layer.effect(WorkflowEng
 
     const deferredState = makeDeferredState()
 
-    // Run setup can yield before `state.fiber` is installed, so concurrent wakes
-    // would otherwise each start a run under the same execution scope.
-    const runSetup = Semaphore.makeUnsafe(1)
-
-    const resume: (executionId: string, mode: WakeMode) => Effect.Effect<void> = Effect.fnUntraced(function*(
-      executionId: string,
-      mode: WakeMode
-    ): Effect.fn.Return<void> {
+    const resume = Effect.fnUntraced(function*(executionId: string, mode: WakeMode): Effect.fn.Return<void> {
       const state = executions.get(executionId)
       if (!state) return
       const exit = state.fiber?.pollUnsafe()
@@ -802,17 +794,10 @@ export const layerMemory: Layer.Layer<WorkflowEngine> = Layer.effect(WorkflowEng
       }
 
       const entry = workflows.get(state.instance.workflow._tag)!
-      // A run that ended without suspending (e.g. a defect) closed the
-      // execution scope. Forking from it would close the new run's scope
-      // immediately, so a resumed execution starts a fresh one.
-      if (state.scope.state._tag === "Closed") {
-        state.scope = Scope.makeUnsafe()
-      }
-      const executionScope = state.scope
       // Like the cluster engine, each run gets a fresh scope, so replays rebuild
       // compensations instead of registering them again.
       const instance = WorkflowInstance.initial(state.instance.workflow, state.instance.executionId, {
-        scope: Scope.forkUnsafe(executionScope)
+        scope: Scope.forkUnsafe(state.scope)
       })
       state.instance = instance
       state.fiber = yield* state.execute(state.payload, state.instance.executionId).pipe(
@@ -832,11 +817,9 @@ export const layerMemory: Layer.Layer<WorkflowEngine> = Layer.effect(WorkflowEng
           instance.suspended = false
           return Effect.withFiber((fiber) => Effect.interruptible(Fiber.interrupt(fiber)))
         }),
-        // Deferred wakes interrupt only the body, so `intoResult` still reports `Suspended`.
-        (effect) => deferredState.trackRun(instance, effect),
         Workflow.intoResult,
-        Effect.provideService(WorkflowInstance, instance),
         Effect.provideService(WorkflowEngine, engine),
+        (effect) => deferredState.trackRun(instance, effect),
         Effect.tap((result) => {
           if (!state.parent || result._tag !== "Complete") {
             return Effect.void
@@ -850,13 +833,13 @@ export const layerMemory: Layer.Layer<WorkflowEngine> = Layer.effect(WorkflowEng
           // superseded compensations are skipped, which means their finalizers
           // also observe success rather than the outcome.
           return Effect.andThen(
-            Scope.close(executionScope, Exit.void),
+            Scope.close(state.scope, Exit.void),
             Exit.isSuccess(exit) && exit.value._tag === "Complete" ? Deferred.succeed(state.done, void 0) : Effect.void
           )
         }),
         Effect.forkIn(entry.scope)
       )
-    }, runSetup.withPermits(1))
+    })
 
     const deferredResults = new Map<string, Exit.Exit<any, any>>()
 

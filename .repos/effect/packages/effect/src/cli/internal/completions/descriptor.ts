@@ -69,38 +69,6 @@ const toArgumentType = (single: Param.Single<"argument", unknown>): Completions.
 // Extraction
 // ---------------------------------------------------------------------------
 
-type FlagParam =
-  | Param.Single<"flag", unknown>
-  | Param.Map<"flag", unknown, unknown>
-  | Param.Transform<"flag", unknown, unknown>
-  | Param.Optional<"flag", unknown>
-  | Param.Variadic<"flag", unknown>
-
-/**
- * Pairs each single flag with whether it can be repeated. The outermost
- * variadic decides, and each `orElse` alternative is resolved separately.
- */
-const repeatableSingles = (
-  param: Param.Param<"flag", unknown>,
-  repeatable?: boolean
-): Array<readonly [Param.Single<"flag", unknown>, boolean]> => {
-  const p = param as FlagParam
-  switch (p._tag) {
-    case "Single":
-      return [[p, repeatable === true]]
-    case "Map":
-    case "Optional":
-      return repeatableSingles(p.param, repeatable)
-    case "Transform":
-      return [
-        ...repeatableSingles(p.param, repeatable),
-        ...p.alternatives.flatMap((alternative) => repeatableSingles(alternative(), repeatable))
-      ]
-    case "Variadic":
-      return repeatableSingles(p.param, repeatable ?? !Option.exists(p.max, (max) => max <= 1))
-  }
-}
-
 /**
  * @internal
  */
@@ -115,7 +83,9 @@ export const fromCommand = (
   const seen = new Set<string>()
   // Match help's precedence: local flags first, then ancestors root to leaf.
   for (const [index, flag] of [...config.flags, ...inheritedFlags].entries()) {
-    for (const [single, repeatable] of repeatableSingles(flag)) {
+    const singles = Param.extractSingleParams(flag)
+    for (const single of singles) {
+      if (single.kind !== "flag") continue
       // Omit hidden flags from completion scripts so tab-completion in the
       // shell does not advertise flags that are absent from --help.
       if (single.hidden) continue
@@ -125,9 +95,8 @@ export const fromCommand = (
         name: single.name,
         aliases: single.aliases,
         description: Option.getOrUndefined(single.description),
-        type: toFlagType(single),
+        type: toFlagType(single as Param.Single<"flag", unknown>),
         optionalValue: single.optionalValue !== undefined,
-        repeatable,
         negation: single.negation
       })
     }
@@ -142,8 +111,7 @@ export const fromCommand = (
       args.push({
         name: single.name,
         description: Option.getOrUndefined(single.description),
-        required: !metadata.isOptional &&
-          (!metadata.isVariadic || Option.exists(metadata.variadicMin, (min) => min > 0)),
+        required: !metadata.isOptional,
         variadic: metadata.isVariadic,
         type: toArgumentType(single as Param.Single<"argument", unknown>)
       })

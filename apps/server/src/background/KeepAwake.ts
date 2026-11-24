@@ -14,7 +14,6 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
-import { windowsPowerShellPath } from "@t3tools/shared/windowsSystem";
 import { forkParked } from "../serverActivation.ts";
 import * as Settings from "../serverSettings.ts";
 
@@ -28,11 +27,10 @@ const WINDOWS_HOLD_SCRIPT = `$t = Add-Type -Name Power -Namespace T3 -PassThru -
  * Each command writes a line to stdout once it holds its inhibitor, holds it until it exits, and
  * exits on its own if the server dies.
  */
-export function inhibitorCommand(
+function inhibitorCommand(
   platform: NodeJS.Platform,
   serverPid: number,
   isWsl: boolean,
-  env: NodeJS.ProcessEnv,
 ):
   | {
       readonly command: string;
@@ -65,7 +63,7 @@ export function inhibitorCommand(
       return {
         command: "systemd-inhibit",
         args: [
-          "--what=sleep",
+          "--what=idle:sleep",
           "--who=T3 Code",
           "--why=Agents are working",
           "--mode=block",
@@ -79,7 +77,7 @@ export function inhibitorCommand(
       };
     case "win32":
       return {
-        command: windowsPowerShellPath(env),
+        command: "powershell.exe",
         args: [
           "-NoProfile",
           "-NonInteractive",
@@ -147,7 +145,7 @@ export const layer = Layer.effectDiscard(
         Effect.map((release) => release.toLowerCase().includes("microsoft")),
         Effect.orElseSucceed(() => false),
       ));
-    const command = inhibitorCommand(platform, process.pid, isWsl, yield* HostProcess.Environment);
+    const command = inhibitorCommand(platform, process.pid, isWsl);
     if (command === undefined) return;
     const settings = yield* Settings.ServerSettingsService;
     const events = yield* OrchestrationEventStore.OrchestrationEventStore;

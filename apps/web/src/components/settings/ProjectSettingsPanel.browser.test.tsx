@@ -536,16 +536,13 @@ describe("project identity reset", () => {
         input: { projectId: state.projects[0]!.id, title: "No project" },
       }),
     );
-    const iconReset = resetButton(screen, "project icon")!;
-    const iconRow = iconReset.closest('[data-slot="settings-row"]');
-    await userEvent.click(iconReset);
+    await userEvent.click(resetButton(screen, "project icon")!);
     await vi.waitFor(() =>
       expect(state.update).toHaveBeenLastCalledWith({
         environmentId: primaryId,
         input: { projectId: state.projects[0]!.id, faviconPath: null, projectIcon: scratchIcon },
       }),
     );
-    expect(document.activeElement).toBe(iconRow);
   });
 
   it("resets each member of a mixed group to its own default icon", async () => {

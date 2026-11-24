@@ -13,8 +13,8 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -24,6 +24,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as NodeUtil from "node:util";
 
 import * as ModelManifest from "./ModelManifest.ts";
+import { resolveProviderCompatibility } from "./providerCompatibility.ts";
 import * as ProviderInstallationGate from "./ProviderInstallationGate.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import { makeProviderMaintenanceCommandCoordinator } from "./providerMaintenanceCommandCoordinator.ts";
@@ -40,6 +41,11 @@ import type { ProviderMaintenanceCapabilities } from "@t3tools/provider-core/ser
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 
+// Native updaters (`claude update`) download a ~300 MB binary without printing
+// progress, and killing one mid-download leaves a truncated binary that the
+// next run treats as installed. Allow a slow connection to finish.
+const UPDATE_TIMEOUT_MINUTES = 30;
+const UPDATE_TIMEOUT_MS = UPDATE_TIMEOUT_MINUTES * 60_000;
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
 // Sample installer output because every progress update resends the provider list to all clients.
 const UPDATE_PROGRESS_INTERVAL = Duration.seconds(1);
@@ -51,6 +57,7 @@ export interface ProviderMaintenanceCommandResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly exitCode: number | null;
+  readonly timedOut: boolean;
   readonly stdoutTruncated: boolean;
   readonly stderrTruncated: boolean;
 }
@@ -187,16 +194,31 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
           stdout: stdout.text,
           stderr: stderr.text,
           exitCode: Number(exitCode),
+          timedOut: false,
           stdoutTruncated: stdout.truncated,
           stderrTruncated: stderr.truncated,
         } satisfies ProviderMaintenanceCommandResult;
       },
     );
 
-    // No timeout: killing an installer mid-install leaves the provider half-replaced (npm has moved
-    // the old package and its shims aside; `claude update` leaves a truncated binary), and an
-    // installer still running must keep the update's locks until it exits.
-    return yield* collectCommandResult().pipe(Effect.scoped);
+    return yield* collectCommandResult().pipe(
+      Effect.scoped,
+      Effect.timeoutOption(Duration.millis(UPDATE_TIMEOUT_MS)),
+      Effect.map((result) =>
+        Option.match(result, {
+          onSome: (value) => value,
+          onNone: () =>
+            ({
+              stdout: "",
+              stderr: "",
+              exitCode: null,
+              timedOut: true,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            }) satisfies ProviderMaintenanceCommandResult,
+        }),
+      ),
+    );
   },
 );
 
@@ -260,6 +282,9 @@ function failureReason(result: ProviderMaintenanceCommandResult): string | null 
 }
 
 function failureMessage(result: ProviderMaintenanceCommandResult): string {
+  if (result.timedOut) {
+    return `Update timed out after ${UPDATE_TIMEOUT_MINUTES} minutes.`;
+  }
   const summary =
     result.exitCode !== null && result.exitCode !== 0
       ? `Update command exited with code ${result.exitCode}`
@@ -299,7 +324,6 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
   const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
-  const serviceScope = yield* Effect.scope;
   const installationGate = yield* ProviderInstallationGate.ProviderInstallationGate;
   const runMaintenanceCommand = (
     update: ProviderMaintenanceCommandAction,
@@ -491,11 +515,13 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
                   latestVersions,
                 ),
               ));
-            const advisory = ModelManifest.providerCompatibility(
-              manifest,
-              provider,
-              candidateVersion,
-            );
+            const advisory =
+              resolveProviderCompatibility(manifest.compatibility, provider, candidateVersion) ??
+              resolveProviderCompatibility(
+                ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+                provider,
+                candidateVersion,
+              );
             const command =
               targetVersion !== undefined
                 ? makeTargetedProviderUpdateAction(fresh, targetVersion)
@@ -569,11 +595,12 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               ),
             );
             const finishedAt = yield* nowIso;
-            if (result.exitCode !== 0) {
+            if (result.timedOut || result.exitCode !== 0) {
               yield* Effect.logWarning("Provider update command failed", {
                 provider,
                 command: describeCommand(command),
                 exitCode: result.exitCode,
+                timedOut: result.timedOut,
                 output: commandOutput(result),
               });
               return yield* finish(
@@ -661,8 +688,7 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
       },
     );
 
-    // Installers cannot be safely killed mid-install, so the update outlives a disconnecting caller.
-    const updateFiber = yield* commandCoordinator
+    return yield* commandCoordinator
       .withCommandLock({
         targetKey,
         lockKey: update.lockKey,
@@ -670,10 +696,10 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
         run: runProviderUpdate(),
       })
       .pipe(
-        // Server shutdown interrupts the update; a "running" state would spin until restart.
+        // A dropped request interrupts the update; a "running" state would spin until restart.
         Effect.onInterrupt(() =>
           Effect.gen(function* () {
-            // A finished state stays, even if shutdown lands while it is being written.
+            // A finished state stays, even if the request drops while it is being written.
             if (yield* Ref.get(settled)) return;
             yield* setUpdateState(
               makeUpdateState({
@@ -685,18 +711,15 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
             );
           }).pipe(Effect.ignore),
         ),
-        Effect.forkIn(serviceScope),
+        Effect.mapError((error) =>
+          isServerProviderUpdateError(error)
+            ? new ServerProviderUpdateError({
+                provider,
+                reason: error.reason,
+              })
+            : error,
+        ),
       );
-    return yield* Fiber.join(updateFiber).pipe(
-      Effect.mapError((error) =>
-        isServerProviderUpdateError(error)
-          ? new ServerProviderUpdateError({
-              provider,
-              reason: error.reason,
-            })
-          : error,
-      ),
-    );
   });
 
   return ProviderMaintenanceRunner.of({

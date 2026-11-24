@@ -151,11 +151,7 @@ export const empty: Headers = Object.create(Proto)
  *
  * **Details**
  *
- * Header names are normalized to lowercase. Array values in record input and repeated names in iterable input are joined with `", "`, and `undefined` values are omitted.
- *
- * **Gotchas**
- *
- * A comma-joined `Set-Cookie` value is not safe to forward as a single header. Use `response.cookies` for structured cookies on HTTP client responses.
+ * Header names are normalized to lowercase. Array values in record input are joined with `", "`, and `undefined` values are omitted.
  *
  * @stability unstable
  * @category constructors
@@ -167,8 +163,7 @@ export const fromInput: (input?: Input) => Headers = (input) => {
   } else if (Symbol.iterator in input) {
     const out: Record<string, string> = Object.create(Proto)
     for (const [k, v] of input) {
-      const key = k.toLowerCase()
-      out[key] = key in out ? `${out[key]}, ${v}` : v
+      out[k.toLowerCase()] = v
     }
     return out as Headers
   }

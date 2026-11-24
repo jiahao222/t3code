@@ -2,7 +2,6 @@ import { imageMimeType } from "@t3tools/shared/image";
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { FilePreviewItem } from "../components/ui/FilePreviewModal.types";
 import { isFileBackedComposerAttachment, type DraftComposerAttachment } from "./composerImages";
-import { remoteAttachmentImageSource } from "./filePreviewGallery";
 
 export function composerImageGallery(
   attachments: readonly DraftComposerAttachment[],
@@ -12,7 +11,17 @@ export function composerImageGallery(
     if (attachment.type !== "image" && imageMimeType(attachment) === null) return [];
     if (environmentId !== undefined && attachment.uploadedAttachmentId) {
       return [
-        remoteAttachmentImageSource(environmentId, attachment.uploadedAttachmentId, attachment),
+        {
+          kind: "image",
+          name: attachment.name,
+          environmentId,
+          resource: {
+            _tag: "attachment",
+            attachmentId: attachment.uploadedAttachmentId,
+            fileName: attachment.name,
+            mimeType: attachment.mimeType,
+          },
+        },
       ];
     }
     if (isFileBackedComposerAttachment(attachment)) {

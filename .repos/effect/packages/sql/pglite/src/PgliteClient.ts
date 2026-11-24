@@ -66,7 +66,7 @@ export type TypeId = "~@effect/sql-pglite/PgliteClient"
  * @category services
  * @since 4.0.0
  */
-export interface PgliteClient extends Client.Base {
+export interface PgliteClient extends Client.SqlClient {
   readonly [TypeId]: TypeId
   readonly config: PgliteClientConfig
   readonly pglite: PGliteInterface
@@ -99,9 +99,7 @@ export interface PgliteClient extends Client.Base {
  * @category services
  * @since 4.0.0
  */
-export const PgliteClient = Context.Service<PgliteClient, PgliteClient & Client.SqlClient>(
-  "@effect/sql-pglite/PgliteClient"
-)
+export const PgliteClient = Context.Service<PgliteClient>("@effect/sql-pglite/PgliteClient")
 
 /**
  * Configuration for a PGlite client, either by supplying PGlite creation options or an existing live PGlite client.
@@ -177,7 +175,7 @@ export declare namespace PgliteClientConfig {
  */
 export const make = (
   options: PgliteClientConfig = {}
-): Effect.Effect<PgliteClient & Client.SqlClient, SqlError, Scope.Scope | Reactivity.Reactivity> =>
+): Effect.Effect<PgliteClient, SqlError, Scope.Scope | Reactivity.Reactivity> =>
   Effect.gen(function*() {
     const pglite = "liveClient" in options
       ? options.liveClient
@@ -210,7 +208,7 @@ export const fromClient = (
     & {
       readonly liveClient: PGliteInterface
     }
-): Effect.Effect<PgliteClient & Client.SqlClient, SqlError, Scope.Scope | Reactivity.Reactivity> =>
+): Effect.Effect<PgliteClient, SqlError, Scope.Scope | Reactivity.Reactivity> =>
   Effect.gen(function*() {
     const pglite = options.liveClient
     const compiler = makeCompiler(options.transformQueryNames, options.transformJson)
@@ -369,7 +367,7 @@ class PgliteConnection implements Connection {
  * @since 4.0.0
  */
 export const layerFrom = <E, R>(
-  acquire: Effect.Effect<PgliteClient & Client.SqlClient, E, R>
+  acquire: Effect.Effect<PgliteClient, E, R>
 ): Layer.Layer<PgliteClient | Client.SqlClient, E, Exclude<R, Scope.Scope | Reactivity.Reactivity>> =>
   Layer.effectContext(
     Effect.map(acquire, (client) =>

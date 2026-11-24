@@ -65,7 +65,7 @@ export type TypeId = "~@effect/sql-sqlite-do/SqliteClient"
  * @category services
  * @since 4.0.0
  */
-export interface SqliteClient extends Client.Base {
+export interface SqliteClient extends Client.SqlClient {
   readonly [TypeId]: TypeId
   readonly config: SqliteClientConfig
 
@@ -85,9 +85,7 @@ export interface SqliteClient extends Client.Base {
  * @category services
  * @since 4.0.0
  */
-export const SqliteClient = Context.Service<SqliteClient, SqliteClient & Client.SqlClient>(
-  "@effect/sql-sqlite-do/SqliteClient"
-)
+export const SqliteClient = Context.Service<SqliteClient>("@effect/sql-sqlite-do/SqliteClient")
 
 const SqliteTransaction = Context.Service<Client.TransactionConnection, Client.TransactionConnection.Service>(
   "@effect/sql-sqlite-do/SqliteClient/SqliteTransaction"
@@ -210,7 +208,7 @@ const makeStorageBackedWithTransaction = (
  */
 export const make = (
   options: SqliteClientConfig
-): Effect.Effect<SqliteClient & Client.SqlClient, never, Scope.Scope | Reactivity.Reactivity> =>
+): Effect.Effect<SqliteClient, never, Scope.Scope | Reactivity.Reactivity> =>
   Effect.gen(function*() {
     const compiler = Statement.makeCompilerSqlite(options.transformQueryNames)
     const transformRows = options.transformResultNames
@@ -328,7 +326,7 @@ export const make = (
       transactionService: SqliteTransaction,
       spanAttributes,
       transformRows
-    })) as SqliteClient & Client.SqlClient
+    })) as SqliteClient
 
     return Object.assign(client, {
       [TypeId]: TypeId as TypeId,

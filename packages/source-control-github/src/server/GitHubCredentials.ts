@@ -174,14 +174,8 @@ export const make = Effect.gen(function* () {
           ...(account === undefined ? [] : ["--user", account]),
         ],
         cwd: workingDirectory,
-        // Never let gh print the token into a debug log. gh answers any host but github.com with
-        // the enterprise variables, which would undo the GH_HOST restriction above.
-        env: {
-          GH_DEBUG: "",
-          GH_PROMPT_DISABLED: "1",
-          GH_ENTERPRISE_TOKEN: "",
-          GITHUB_ENTERPRISE_TOKEN: "",
-        },
+        // Never let gh print the token into a debug log.
+        env: { GH_DEBUG: "", GH_PROMPT_DISABLED: "1" },
         timeoutMs: 10_000,
         concurrency: GH_PROCESS_CONCURRENCY,
       })

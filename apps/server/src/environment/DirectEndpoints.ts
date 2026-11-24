@@ -24,12 +24,7 @@ import {
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
-import {
-  isLoopbackHost,
-  isPrivateNetworkAddress,
-  isVirtualInterface,
-  WINDOWS_HOST_ADAPTER_MAC,
-} from "../startupAccess.ts";
+import { isLoopbackHost, isPrivateNetworkAddress, isVirtualInterface } from "../startupAccess.ts";
 
 type NetworkInterfacesMap = ReturnType<typeof NodeOS.networkInterfaces>;
 
@@ -56,6 +51,9 @@ const isTailscaleInterface = (
 ): boolean =>
   /^tailscale/i.test(name) ||
   entries.some((entry) => entry.family === "IPv6" && isTailnetHost(entry.address));
+
+// Windows adapter names are mutable; Linux bridges can inherit these MACs.
+const WINDOWS_HOST_ADAPTER_MAC = /^(0a:00:27|00:50:56:c0:00):/i;
 
 export function resolveBoundEndpoints(input: {
   readonly platform: NodeJS.Platform;
@@ -130,13 +128,7 @@ export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const platform = yield* HostProcess.Platform;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
-  // Only the service default listens on every interface without being asked,
-  // so only it checks once whether it runs in a cloud. The check starts now so
-  // the first client does not wait for its timeout.
-  const onCloudVm = config.privateNetworkOnly
-    ? yield* Effect.cached(probeCloudMetadata)
-    : Effect.succeed(false);
-  yield* Effect.forkDetach(onCloudVm);
+  const onCloudVm = Effect.succeed(false);
 
   const servedEndpoint = yield* Ref.make<Option.Option<string>>(Option.none());
   const resolveAvailable = Effect.fn("DirectEndpoints.resolveAvailable")(function* () {

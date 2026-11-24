@@ -11,7 +11,6 @@ import {
   type UsageLimitSourceSnapshot,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
-import { antigravityWindowLimitsModel, hubRoutes } from "@t3tools/shared/usageLimits";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -82,9 +81,7 @@ function keepLastGoodReadings(
             candidate.email === account.email &&
             candidate.workspaceId === account.workspaceId,
         );
-        if (!last || last.usageLimits.unavailable) return account;
-        // Only the reading is lent; an unread model list stays unknown.
-        return { ...last, models: account.models };
+        return last && !last.usageLimits.unavailable ? last : account;
       }),
     };
   });
@@ -252,7 +249,7 @@ export const layer = Layer.effect(UsageLimitSources, make).pipe(
   Layer.provide(SecretResolverLayer.layer),
 );
 
-/** A hub returns a usage limit only when every account it routes the model to is spent. */
+/** A hub answers with a usage limit only when every account it routes the driver to is spent. */
 export function hubPoolResetAt(
   sources: ReadonlyArray<UsageLimitSourceSnapshot>,
   driver: ProviderDriverKind,
@@ -260,22 +257,21 @@ export function hubPoolResetAt(
   now: number,
 ): string | null {
   let earliest: number | null = null;
-  const routes = hubRoutes(sources, driver, model);
-  for (const account of sources.flatMap((source) => source.accounts).filter(routes)) {
-    // An unread account may be the one still blocked, so its refill is unknown.
-    if (account.usageLimits.unavailable) return null;
-    const spent = account.usageLimits.windows.filter(
-      (window) =>
-        window.usedPercent >= 100 &&
-        windowLimitsModel(window, model) &&
-        (account.driver !== "antigravity" || antigravityWindowLimitsModel(window, model)),
-    );
-    if (spent.length === 0) return null;
-    const resets = spent.map((window) => Date.parse(window.resetsAt ?? ""));
-    if (resets.some((reset) => !Number.isFinite(reset))) return null;
-    const recoversAt = Math.max(...resets);
-    if (recoversAt <= now) return null;
-    earliest = earliest === null ? recoversAt : Math.min(earliest, recoversAt);
+  for (const source of sources) {
+    for (const account of source.accounts) {
+      if (account.driver !== driver) continue;
+      // An unread account may be the one still blocked, so its refill is unknown.
+      if (account.usageLimits.unavailable) return null;
+      const spent = account.usageLimits.windows.filter(
+        (window) => window.usedPercent >= 100 && windowLimitsModel(window, model),
+      );
+      if (spent.length === 0) return null;
+      const resets = spent.map((window) => Date.parse(window.resetsAt ?? ""));
+      if (resets.some((reset) => !Number.isFinite(reset))) return null;
+      const recoversAt = Math.max(...resets);
+      if (recoversAt <= now) return null;
+      earliest = earliest === null ? recoversAt : Math.min(earliest, recoversAt);
+    }
   }
   return earliest === null ? null : DateTime.formatIso(DateTime.makeUnsafe(earliest));
 }

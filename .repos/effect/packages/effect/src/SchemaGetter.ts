@@ -1501,20 +1501,12 @@ export function split<E extends string>(options?: {
   return transform((input) => input === "" ? [] : input.split(separator))
 }
 
-function encodeWithWellFormedString<E extends string | Uint8Array>(encode: (input: E) => string): Getter<string, E> {
-  return transformEffect((input, options) =>
-    typeof input === "string" && !Str.isWellFormed(input)
-      ? Effect.fail(new SchemaIssue.InvalidValue({ expected: "a well-formed Unicode string" }, input, options))
-      : Effect.succeed(encode(input))
-  )
-}
-
 /**
  * Encodes a `Uint8Array` or string to a Base64 string.
  *
  * **Details**
  *
- * Fails with `SchemaIssue.InvalidValue` if a string contains an unpaired UTF-16 surrogate.
+ * The getter is pure and never fails.
  *
  * **Example** (Encoding to Base64)
  *
@@ -1535,7 +1527,7 @@ function encodeWithWellFormedString<E extends string | Uint8Array>(encode: (inpu
  * @since 4.0.0
  */
 export function encodeBase64<E extends Uint8Array | string>(): Getter<string, E> {
-  return encodeWithWellFormedString(Base64.encode)
+  return transform(Base64.encode)
 }
 
 /**
@@ -1543,8 +1535,8 @@ export function encodeBase64<E extends Uint8Array | string>(): Getter<string, E>
  *
  * **Details**
  *
- * The output is unpadded unless `padding` is `true`.
- * Fails with `SchemaIssue.InvalidValue` if a string contains an unpaired UTF-16 surrogate.
+ * The getter is pure and never fails. The output is unpadded unless
+ * `padding` is `true`.
  *
  * **Example** (Encoding to Base64Url)
  *
@@ -1568,7 +1560,7 @@ export function encodeBase64Url<E extends Uint8Array | string>(options?: {
   /** Keep the `=` padding. Defaults to `false`. */
   readonly padding?: boolean | undefined
 }): Getter<string, E> {
-  return encodeWithWellFormedString(options?.padding ? Base64Url.encodePadded : Base64Url.encode)
+  return transform(options?.padding ? Base64Url.encodePadded : Base64Url.encode)
 }
 
 /**
@@ -1576,7 +1568,7 @@ export function encodeBase64Url<E extends Uint8Array | string>(options?: {
  *
  * **Details**
  *
- * Fails with `SchemaIssue.InvalidValue` if a string contains an unpaired UTF-16 surrogate.
+ * The getter is pure and never fails.
  *
  * **Example** (Encoding to hex)
  *
@@ -1596,7 +1588,7 @@ export function encodeBase64Url<E extends Uint8Array | string>(options?: {
  * @since 4.0.0
  */
 export function encodeHex<E extends Uint8Array | string>(): Getter<string, E> {
-  return encodeWithWellFormedString(Hex.encode)
+  return transform(Hex.encode)
 }
 
 /**
@@ -1843,7 +1835,8 @@ export function decodeHexString<E extends string>(): Getter<string, E> {
  * **Details**
  *
  * - Skips `None` inputs.
- * - Fails with `SchemaIssue.InvalidValue` if the input contains an unpaired UTF-16 surrogate.
+ * - May throw a `URIError` for malformed surrogate pairs; this exception is not
+ *   converted into an `Issue`.
  *
  * **Example** (Encoding a URI component)
  *
@@ -1862,7 +1855,7 @@ export function decodeHexString<E extends string>(): Getter<string, E> {
  * @since 4.0.0
  */
 export function encodeUriComponent<E extends string>(): Getter<string, E> {
-  return encodeWithWellFormedString<E>(encodeURIComponent)
+  return transform(encodeURIComponent)
 }
 
 /**

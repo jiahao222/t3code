@@ -35,8 +35,7 @@ PersistedQueueTest.suite(
   PersistedQueue.layerStoreRedis({
     pollInterval: "50 millis",
     lockRefreshInterval: "100 millis"
-  }).pipe(Layer.provide(RedisLayer)),
-  { cleanupUsesClock: true }
+  }).pipe(Layer.provide(RedisLayer))
 )
 
 CircuitBreakerTest.suite(

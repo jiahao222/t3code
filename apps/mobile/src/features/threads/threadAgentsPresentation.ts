@@ -1,4 +1,3 @@
-import { resolveLinkedThreadOpen } from "@t3tools/client-runtime/linked-thread";
 import {
   formatSubagentDisplayTitle,
   resolveSubagentMetadata,
@@ -7,7 +6,6 @@ import {
 } from "@t3tools/client-runtime/state/subagent-display";
 import {
   isActiveSubagentStatus,
-  promptTitle,
   type RuntimeSubagent,
   type SubagentWorkflowGroup,
 } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -23,6 +21,8 @@ import { msg } from "gt-react-native";
 
 import { m, type MessageResolver } from "../../i18n/messages";
 
+const PROMPT_TITLE_LIMIT = 80;
+
 export type SubagentRowTone = "working" | "completed" | "failed" | "stopped";
 
 export interface SubagentRowPresentation {
@@ -36,41 +36,23 @@ export interface SubagentRowPresentation {
   readonly runsOn: string | null;
 }
 
-export interface SubagentThreadTarget {
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
-  /** Set when the thread is read through the environment that links to it, not opened there. */
-  readonly linked?: { readonly viaEnvironmentId: EnvironmentId; readonly label: string };
-}
-
 /**
- * Where an agent's thread opens: here, in the linked environment that runs it when this app is
- * connected there, or read-only through this environment's link. Once the link is gone a saved
- * environment opens in place, where the app can reconnect to it; with neither, the read-only view
- * says what to link again. Null when there is no thread.
+ * Where an agent's thread opens: here, or in the linked environment that runs
+ * it. Null when there is no thread, or this app is not connected to that
+ * environment.
  */
 export function subagentThreadTarget(
   subagent: Pick<OrchestrationV2Subagent, "childThreadId" | "remoteChild">,
   environmentId: EnvironmentId,
-  ownConnection: (environmentId: EnvironmentId) => { readonly connected: boolean } | undefined,
-  /** Whether `environmentId` still holds a link to the given environment. */
-  isLinked: (environmentId: EnvironmentId) => boolean,
-): SubagentThreadTarget | null {
+  isKnownEnvironment: (environmentId: EnvironmentId) => boolean,
+): { readonly environmentId: EnvironmentId; readonly threadId: ThreadId } | null {
   if (subagent.childThreadId !== null) {
     return { environmentId, threadId: subagent.childThreadId };
   }
   const remote = subagent.remoteChild;
-  if (remote === undefined) return null;
-  const target = { environmentId: remote.environmentId, threadId: remote.threadId };
-  const open = resolveLinkedThreadOpen({
-    environmentId: remote.environmentId,
-    viaEnvironmentId: environmentId,
-    own: ownConnection(remote.environmentId),
-    linked: isLinked(remote.environmentId),
-  });
-  return open === "direct"
-    ? target
-    : { ...target, linked: { viaEnvironmentId: environmentId, label: remote.label } };
+  return remote !== undefined && isKnownEnvironment(remote.environmentId)
+    ? { environmentId: remote.environmentId, threadId: remote.threadId }
+    : null;
 }
 
 function rowTitle(
@@ -81,7 +63,9 @@ function rowTitle(
   if (title) return formatSubagentDisplayTitle(title);
   const prompt = subagent.prompt.trim();
   if (prompt.length === 0) return resolve(msg("Subagent"));
-  return promptTitle(prompt);
+  return prompt.length > PROMPT_TITLE_LIMIT
+    ? `${prompt.slice(0, PROMPT_TITLE_LIMIT - 3)}...`
+    : prompt;
 }
 
 function rowTone(status: OrchestrationV2Subagent["status"]): SubagentRowTone {
@@ -216,8 +200,7 @@ export function workflowMemberMetadata(
   const effortChoice = provider?.models
     .find((candidate) => candidate.slug === slug)
     ?.capabilities?.optionDescriptors?.flatMap((descriptor) =>
-      descriptor.type === "select" &&
-      (descriptor.role === "reasoning" || REASONING_EFFORT_OPTION_IDS.includes(descriptor.id))
+      descriptor.type === "select" && REASONING_EFFORT_OPTION_IDS.includes(descriptor.id)
         ? descriptor.options
         : [],
     )

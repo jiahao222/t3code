@@ -243,86 +243,14 @@ export async function searchOpenVsxThemes(
   query: string,
   { signal, sortBy = "downloadCount" }: OpenVsxThemeSearchOptions = {},
 ): Promise<OpenVsxThemeExtension[]> {
-  const searchText = query.trim();
-  if (!searchText) return [];
-  const url = new URL(OPEN_VSX_SEARCH_URL);
-  url.searchParams.set("query", searchText);
-  url.searchParams.set("category", "Themes");
-  url.searchParams.set("sortBy", sortBy);
-  url.searchParams.set("sortOrder", "desc");
-  url.searchParams.set("size", "16");
-  const value = await withSearchTimeout(async (requestSignal) => {
-    const response = await fetch(url, { signal: requestSignal });
-    if (!response.ok) throw new Error(m(msg("Open VSX search is unavailable right now.")));
-    const searchBytes = await readCappedResponse(
-      response,
-      MAX_SEARCH_BYTES,
-      m(msg("Open VSX returned an unexpectedly large response.")),
-    );
-    try {
-      return JSON.parse(new TextDecoder().decode(searchBytes)) as unknown;
-    } catch {
-      throw new Error(m(msg("Open VSX returned an unreadable response.")));
-    }
-  }, signal);
-  if (!isRecord(value) || !Array.isArray(value.extensions)) {
-    throw new Error(m(msg("Open VSX returned an unreadable search response.")));
-  }
-  const identities = value.extensions.flatMap((candidate): Array<[string, string]> => {
-    if (!isRecord(candidate)) return [];
-    const namespace = typeof candidate.namespace === "string" ? candidate.namespace : "";
-    const name = typeof candidate.name === "string" ? candidate.name : "";
-    return namespace && name ? [[namespace, name]] : [];
-  });
-  const details = await Promise.allSettled(
-    identities.slice(0, 16).map(([namespace, name]) =>
-      withSearchTimeout(async (requestSignal) => {
-        const detailUrl = `https://open-vsx.org/api/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`;
-        const detailResponse = await fetch(detailUrl, { signal: requestSignal });
-        if (!detailResponse.ok) throw new Error(m(msg("Open VSX theme details are unavailable.")));
-        const detailBytes = await readCappedResponse(
-          detailResponse,
-          MAX_DETAIL_BYTES,
-          m(msg("Open VSX returned an unexpectedly large detail response.")),
-        );
-        try {
-          const extension = extensionFromDetail(JSON.parse(new TextDecoder().decode(detailBytes)));
-          if (!extension) return null;
-          const [manifestResponse, packageResponse] = await Promise.all([
-            fetch(extension.manifestUrl, { signal: requestSignal }),
-            fetch(extension.vsixUrl, { method: "HEAD", signal: requestSignal }),
-          ]);
-          if (!manifestResponse.ok) throw new Error("manifest unavailable");
-          if (!packageResponse.ok) return null;
-          const packageLength = Number(packageResponse.headers.get("content-length"));
-          if (Number.isFinite(packageLength) && packageLength > MAX_VSIX_BYTES) {
-            return null;
-          }
-          const manifestBytes = await readCappedResponse(
-            manifestResponse,
-            MAX_MANIFEST_BYTES,
-            m(msg("Open VSX returned an unexpectedly large manifest.")),
-          );
-          const manifest = parseJsoncObject(
-            new TextDecoder().decode(manifestBytes),
-            m(msg("Extension manifest")),
-          );
-          return themeContributions(manifest).length > 0 &&
-            manifestLicenseMatches(manifest, extension.license)
-            ? extension
-            : null;
-        } catch {
-          throw new Error(m(msg("Open VSX returned unreadable theme details.")));
-        }
-      }, signal),
+  signal?.throwIfAborted();
+  void sortBy;
+  if (!query.trim()) return [];
+  return Promise.reject(
+    new Error(
+      m(msg("Open VSX online search is disabled in local-only mode. Import a local theme file instead.")),
     ),
   );
-  if (signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
-  const completedDetails = details.filter((result) => result.status === "fulfilled");
-  if (identities.length > 0 && completedDetails.length === 0) {
-    throw new Error(m(msg("Open VSX theme details are unavailable right now.")));
-  }
-  return completedDetails.flatMap((result) => (result.value ? [result.value] : [])).slice(0, 8);
 }
 
 function parseJsoncObject(source: string, description: string): Record<string, unknown> {
@@ -647,160 +575,11 @@ export async function importOpenVsxThemeExtension(
   extension: OpenVsxThemeExtension,
   signal?: AbortSignal,
 ): Promise<ReadonlyArray<ThemeDefinition>> {
-  const manifestResponse = await fetch(extension.manifestUrl, signal ? { signal } : {});
-  if (!manifestResponse.ok)
-    throw new Error(m(msg("That Open VSX extension has no readable manifest.")));
-  const manifestBytes = await readCappedResponse(
-    manifestResponse,
-    MAX_MANIFEST_BYTES,
-    m(msg("That Open VSX extension manifest is too large.")),
-  );
-  const manifest = parseJsoncObject(
-    new TextDecoder().decode(manifestBytes),
-    m(msg("Extension manifest")),
-  );
-  const advertisedContributions = themeContributions(manifest);
-  if (advertisedContributions.length === 0) {
-    throw new Error(m(msg("That extension does not contain color themes.")));
-  }
-  if (advertisedContributions.length > MAX_THEMES_PER_EXTENSION) {
-    throw new Error(m(msg("That extension contains too many color themes to import safely.")));
-  }
-
-  const packageBytes = await fetchPackage(extension.vsixUrl, signal);
+  void extension;
   signal?.throwIfAborted();
-  const checksumResponse = await fetch(extension.sha256Url, signal ? { signal } : {});
-  if (!checksumResponse.ok)
-    throw new Error(m(msg("That Open VSX theme has no readable checksum.")));
-  const expectedChecksum = new TextDecoder()
-    .decode(
-      await readCappedResponse(
-        checksumResponse,
-        256,
-        m(msg("That Open VSX checksum response is invalid.")),
-      ),
-    )
-    .trim()
-    .split(/\s+/)[0];
-  if (!expectedChecksum || !/^[a-f\d]{64}$/i.test(expectedChecksum)) {
-    throw new Error(m(msg("That Open VSX theme has an invalid checksum.")));
-  }
-  signal?.throwIfAborted();
-  const actualChecksum = [...sha256(packageBytes)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-  if (actualChecksum.toLowerCase() !== expectedChecksum.toLowerCase()) {
-    throw new Error(m(msg("That Open VSX theme failed its integrity check.")));
-  }
-  signal?.throwIfAborted();
-  let zip: JSZip;
-  try {
-    const inspectedPackageBytes = inspectZipDirectory(packageBytes);
-    zip = await JSZip.loadAsync(inspectedPackageBytes);
-    signal?.throwIfAborted();
-    inspectZip(zip);
-  } catch (cause) {
-    if (signal?.aborted) signal.throwIfAborted();
-    if (cause instanceof Error && extensionPackageErrors.has(cause)) throw cause;
-    throw new Error(m(msg("That Open VSX extension package could not be opened.")), { cause });
-  }
-
-  const packagedManifest = parseJsoncObject(
-    await readZipText(zip, "extension/package.json", m(msg("Extension manifest")), signal),
-    m(msg("Extension manifest")),
+  return Promise.reject(
+    new Error(
+      m(msg("Open VSX online theme download is disabled in local-only mode. Import a local theme file instead.")),
+    ),
   );
-  if (
-    typeof packagedManifest.publisher !== "string" ||
-    packagedManifest.publisher.toLowerCase() !== extension.publisher.toLowerCase() ||
-    typeof packagedManifest.name !== "string" ||
-    `${packagedManifest.publisher}.${packagedManifest.name}`.toLowerCase() !==
-      extension.id.toLowerCase() ||
-    packagedManifest.version !== extension.version
-  ) {
-    throw new Error(m(msg("That extension package does not match the selected Open VSX theme.")));
-  }
-  if (!manifestLicenseMatches(packagedManifest, extension.license)) {
-    throw new Error(m(msg("That extension package does not match its advertised license.")));
-  }
-  const contributions = themeContributions(packagedManifest);
-  if (contributions.length === 0)
-    throw new Error(m(msg("That extension does not contain color themes.")));
-  if (contributions.length > MAX_THEMES_PER_EXTENSION) {
-    throw new Error(m(msg("That extension contains too many color themes to import safely.")));
-  }
-
-  const parsed: Array<{ theme: ThemeDefinition; sourceName: string; sourcePath: string }> = [];
-  const failures: string[] = [];
-  const themeCache = new Map<string, Record<string, unknown>>();
-  const themeBudget = { files: 0 };
-  for (const contribution of contributions) {
-    signal?.throwIfAborted();
-    if (typeof contribution.path !== "string") {
-      failures.push("theme path is missing");
-      continue;
-    }
-    try {
-      const path = normalizePackagePath(contribution.path);
-      const themeValue = await loadThemeObject(
-        zip,
-        path,
-        themeCache,
-        themeBudget,
-        new Set(),
-        signal,
-      );
-      const type = contributionType(contribution.uiTheme);
-      const label =
-        typeof contribution.label === "string" && contribution.label.trim()
-          ? contribution.label.trim()
-          : extension.name;
-      const decorated = {
-        ...themeValue,
-        displayName: label,
-        ...(type ? { type } : {}),
-      };
-      if (!isVsCodeThemeFile(decorated)) throw new Error("not a VS Code color theme");
-      parsed.push({
-        theme: parseVsCodeThemeFile(decorated),
-        sourceName: path.split("/").at(-1)!,
-        sourcePath: path,
-      });
-    } catch (cause) {
-      signal?.throwIfAborted();
-      failures.push(cause instanceof Error ? cause.message : "theme could not be read");
-    }
-  }
-  if (failures.length > 0) {
-    throw new Error(
-      m(msg("One or more color themes in that extension could not be imported safely.")),
-    );
-  }
-  if (parsed.length === 0) {
-    throw new Error(m(msg("That extension has no compatible color themes.")));
-  }
-  const extensionId = extension.id.toLowerCase();
-  const sourcePathCounts = new Map<string, number>();
-  for (const { sourcePath } of parsed) {
-    sourcePathCounts.set(sourcePath, (sourcePathCounts.get(sourcePath) ?? 0) + 1);
-  }
-  const sourcePathOccurrences = new Map<string, number>();
-  const sourceIdentities = parsed.map(({ sourcePath }) => {
-    if (sourcePathCounts.get(sourcePath) === 1) return sourcePath;
-    const occurrence = sourcePathOccurrences.get(sourcePath) ?? 0;
-    sourcePathOccurrences.set(sourcePath, occurrence + 1);
-    return occurrence === 0 ? sourcePath : `${sourcePath}\0${occurrence}`;
-  });
-  const resolved = resolveThemeLabelCollisions(parsed).map((theme, index) => ({
-    ...theme,
-    id: openVsxThemeId(extensionId, sourceIdentities[index]!),
-  }));
-  const paired = pairVsCodeThemes(resolved, {
-    pairedId: (light, dark) => openVsxThemeId(extensionId, [light.id, dark.id].sort().join(":")),
-  });
-  const themes = resolveThemeLabelCollisions(paired.map((theme) => ({ theme })));
-  const collection = {
-    id: extension.collectionId,
-    label: extension.name.slice(0, 48),
-  };
-  return themes.map((theme) => ({ ...theme, collection }));
 }

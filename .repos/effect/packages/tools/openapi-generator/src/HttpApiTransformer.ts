@@ -9,8 +9,6 @@
  *
  * @since 4.0.0
  */
-import * as Codegen from "effect/Codegen"
-import { namedImport, namespaceImport, printImports } from "./internal/module.ts"
 import type {
   ParsedOpenApi,
   ParsedOpenApiSecurityScheme,
@@ -21,14 +19,6 @@ import type {
 } from "./ParsedOperation.ts"
 import * as Utils from "./Utils.ts"
 
-const HttpApi = Codegen.importNamed("effect/http-api", "HttpApi")
-const HttpApiEndpoint = Codegen.importNamed("effect/http-api", "HttpApiEndpoint")
-const HttpApiGroup = Codegen.importNamed("effect/http-api", "HttpApiGroup")
-const HttpApiMiddleware = Codegen.importNamed("effect/http-api", "HttpApiMiddleware")
-const HttpApiSchema = Codegen.importNamed("effect/http-api", "HttpApiSchema")
-const HttpApiSecurity = Codegen.importNamed("effect/http-api", "HttpApiSecurity")
-const OpenApi = Codegen.importNamed("effect/http-api", "OpenApi")
-
 interface GroupRenderModel {
   readonly identifier: string
   readonly topLevel: boolean
@@ -38,8 +28,8 @@ interface GroupRenderModel {
 }
 
 interface SecurityRenderModel {
-  readonly securityDeclarations: ReadonlyArray<Codegen.Fragment>
-  readonly middlewareDeclarations: ReadonlyArray<Codegen.Fragment>
+  readonly securityDeclarations: ReadonlyArray<string>
+  readonly middlewareDeclarations: ReadonlyArray<string>
   readonly endpointMiddlewares: ReadonlyMap<string, ReadonlyArray<string>>
 }
 
@@ -62,14 +52,12 @@ export const imports = (
   options?: {
     readonly multipart?: boolean | undefined
   }
-): string => printImports(moduleImports(importName, options?.multipart === true))
-
-const moduleImports = (importName: string, multipart: boolean): ReadonlyArray<Codegen.Import> => [
-  namespaceImport("effect/Schema", importName),
-  ...(multipart ? [namedImport("effect/http", "Multipart")] : []),
-  ...["HttpApi", "HttpApiEndpoint", "HttpApiGroup", "HttpApiMiddleware", "HttpApiSchema", "HttpApiSecurity", "OpenApi"]
-    .map((name) => namedImport("effect/http-api", name))
-]
+): string =>
+  [
+    `import * as ${importName} from "effect/Schema"`,
+    ...(options?.multipart === true ? [`import { Multipart } from "effect/http"`] : []),
+    `import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, HttpApiSecurity, OpenApi } from "effect/http-api"`
+  ].join("\n")
 
 /**
  * Convert a parsed OpenAPI document into Effect HttpApi source code.
@@ -88,59 +76,29 @@ export const toImplementation = (
   name: string,
   parsed: ParsedOpenApi
 ): string => {
-  const module = new Codegen.Module()
-  return module.finalize([planImplementation(name, parsed, makeNameAllocator())(parsed)]).roots[0]
-}
-
-/** @internal */
-export const registerModule = (
-  module: Codegen.Module,
-  importName: string,
-  name: string,
-  parsed: ParsedOpenApi
-): (parsed: ParsedOpenApi) => Codegen.Fragment => {
-  for (const input of moduleImports(importName, false)) module.addImport(input)
-  const api = module.declare(name)
-  return planImplementation(api.name, parsed, (name) => module.declare(name).name)
-}
-
-const planImplementation = (
-  name: string,
-  parsed: ParsedOpenApi,
-  allocateName: (name: string) => string
-): (parsed: ParsedOpenApi) => Codegen.Fragment => {
-  const security = buildSecurityRenderModel(parsed, allocateName)
-  const groups = groupOperations(parsed, allocateName)
-  const positions = new Map(parsed.operations.map((operation, index) => [operation, index]))
+  const security = buildSecurityRenderModel(parsed)
+  const groups = groupOperations(parsed)
+  const groupSources = groups.map((group) => renderGroup(group, security.endpointMiddlewares))
   const metadataAnnotations = renderApiAnnotations(parsed)
 
-  let apiValue = Codegen.code`export class ${name} extends ${HttpApi}.make(${JSON.stringify(name)})`
+  let apiValue = `export class ${name} extends HttpApi.make(${JSON.stringify(name)})`
   for (const annotation of metadataAnnotations) {
-    apiValue = Codegen.code`${apiValue}\n  .${annotation}`
+    apiValue += `\n  .${annotation}`
   }
   if (groups.length > 0) {
-    apiValue = Codegen.code`${apiValue}\n  .add(${groups.map((group) => group.constName).join(", ")})`
+    apiValue += `\n  .add(${groups.map((group) => group.constName).join(", ")})`
   }
-  apiValue = Codegen.code`${apiValue} {}`
+  apiValue += ` {}`
 
-  return (resolved) =>
-    Codegen.join([
-      ...security.securityDeclarations,
-      ...security.middlewareDeclarations,
-      ...groups.map((group) =>
-        renderGroup({
-          ...group,
-          operations: group.operations.map((operation) => resolved.operations[positions.get(operation)!])
-        }, security.endpointMiddlewares)
-      ),
-      apiValue
-    ], "\n\n")
+  return [
+    ...security.securityDeclarations,
+    ...security.middlewareDeclarations,
+    ...groupSources,
+    apiValue
+  ].join("\n\n")
 }
 
-const groupOperations = (
-  parsed: ParsedOpenApi,
-  allocateName: (name: string) => string
-): ReadonlyArray<GroupRenderModel> => {
+const groupOperations = (parsed: ParsedOpenApi): ReadonlyArray<GroupRenderModel> => {
   const tagMetadata = new Map(parsed.tags.map((tag) => [tag.name, tag]))
   const byIdentifier = new Map<string, {
     readonly identifier: string
@@ -168,6 +126,7 @@ const groupOperations = (
     })
   }
 
+  const allocateName = makeNameAllocator()
   const groups: Array<GroupRenderModel> = []
   for (const group of byIdentifier.values()) {
     const baseName = ensureIdentifier(group.identifier, "Group")
@@ -182,8 +141,8 @@ const groupOperations = (
 const renderGroup = (
   group: GroupRenderModel,
   endpointMiddlewares: ReadonlyMap<string, ReadonlyArray<string>>
-): Codegen.Fragment => {
-  let source = Codegen.code`class ${group.constName} extends ${HttpApiGroup}.make(${JSON.stringify(group.identifier)}${
+): string => {
+  let source = `class ${group.constName} extends HttpApiGroup.make(${JSON.stringify(group.identifier)}${
     group.topLevel ? ", { topLevel: true }" : ""
   })`
 
@@ -196,19 +155,17 @@ const renderGroup = (
     )
   )
   if (endpointSources.length > 0) {
-    source = Codegen.code`${source}\n  .add(${Codegen.join(endpointSources, ", \n    ")})`
+    source += `\n  .add(${endpointSources.join(", \n    ")})`
   }
 
   if (group.metadata?.description !== undefined) {
-    source = Codegen.code`${source}\n  .annotate(${OpenApi}.Description, ${JSON.stringify(group.metadata.description)})`
+    source += `\n  .annotate(OpenApi.Description, ${JSON.stringify(group.metadata.description)})`
   }
   if (group.metadata?.externalDocs !== undefined) {
-    source = Codegen.code`${source}\n  .annotate(${OpenApi}.ExternalDocs, ${
-      JSON.stringify(group.metadata.externalDocs)
-    })`
+    source += `\n  .annotate(OpenApi.ExternalDocs, ${JSON.stringify(group.metadata.externalDocs)})`
   }
 
-  source = Codegen.code`${source} {}`
+  source += ` {}`
 
   return source
 }
@@ -217,58 +174,56 @@ const renderEndpoint = (
   operation: ParsedOperation,
   endpointName: string,
   endpointMiddlewares: ReadonlyArray<string>
-): Codegen.Fragment => {
-  const options: Array<Codegen.Fragment> = []
+): string => {
+  const options: Array<string> = []
   if (operation.pathSchema !== undefined) {
-    options.push(Codegen.code`params: ${operation.pathSchema}`)
+    options.push(`params: ${operation.pathSchema}`)
   }
   if (operation.querySchema !== undefined) {
-    options.push(Codegen.code`query: ${operation.querySchema}`)
+    options.push(`query: ${operation.querySchema}`)
   }
   if (operation.headersSchema !== undefined) {
-    options.push(Codegen.code`headers: ${operation.headersSchema}`)
+    options.push(`headers: ${operation.headersSchema}`)
   }
 
   const payload = renderPayload(operation)
   if (payload !== undefined) {
-    options.push(Codegen.code`payload: ${payload}`)
+    options.push(`payload: ${payload}`)
   }
 
   const success = renderResponseSet(operation.responses, "success")
   if (success !== undefined) {
-    options.push(Codegen.code`success: ${success}`)
+    options.push(`success: ${success}`)
   }
 
   const error = renderResponseSet(operation.responses, "error")
   if (error !== undefined) {
-    options.push(Codegen.code`error: ${error}`)
+    options.push(`error: ${error}`)
   }
 
   const endpoint = options.length === 0
-    ? Codegen.code`${HttpApiEndpoint}.${operation.method}(${JSON.stringify(endpointName)}, ${
+    ? `HttpApiEndpoint.${operation.method}(${JSON.stringify(endpointName)}, ${
       JSON.stringify(toHttpApiPath(operation.path))
     })`
-    : Codegen.code`${HttpApiEndpoint}.${operation.method}(${JSON.stringify(endpointName)}, ${
+    : `HttpApiEndpoint.${operation.method}(${JSON.stringify(endpointName)}, ${
       JSON.stringify(toHttpApiPath(operation.path))
-    }, { ${Codegen.join(options, ", ")} })`
+    }, { ${options.join(", ")} })`
 
-  const annotations: Array<Codegen.Fragment> = []
+  const annotations: Array<string> = []
   if (operation.operationId !== undefined) {
-    annotations.push(Codegen.code`annotate(${OpenApi}.Identifier, ${JSON.stringify(operation.operationId)})`)
+    annotations.push(`annotate(OpenApi.Identifier, ${JSON.stringify(operation.operationId)})`)
   }
   if (operation.metadata.summary !== undefined) {
-    annotations.push(Codegen.code`annotate(${OpenApi}.Summary, ${JSON.stringify(operation.metadata.summary)})`)
+    annotations.push(`annotate(OpenApi.Summary, ${JSON.stringify(operation.metadata.summary)})`)
   }
   if (operation.metadata.description !== undefined) {
-    annotations.push(Codegen.code`annotate(${OpenApi}.Description, ${JSON.stringify(operation.metadata.description)})`)
+    annotations.push(`annotate(OpenApi.Description, ${JSON.stringify(operation.metadata.description)})`)
   }
   if (operation.metadata.deprecated) {
-    annotations.push(Codegen.code`annotate(${OpenApi}.Deprecated, true)`)
+    annotations.push(`annotate(OpenApi.Deprecated, true)`)
   }
   if (operation.metadata.externalDocs !== undefined) {
-    annotations.push(
-      Codegen.code`annotate(${OpenApi}.ExternalDocs, ${JSON.stringify(operation.metadata.externalDocs)})`
-    )
+    annotations.push(`annotate(OpenApi.ExternalDocs, ${JSON.stringify(operation.metadata.externalDocs)})`)
   }
 
   if (annotations.length === 0 && endpointMiddlewares.length === 0) {
@@ -277,15 +232,15 @@ const renderEndpoint = (
 
   let out = endpoint
   for (const middleware of endpointMiddlewares) {
-    out = Codegen.code`${out}\n      .middleware(${middleware})`
+    out += `\n      .middleware(${middleware})`
   }
   for (const annotation of annotations) {
-    out = Codegen.code`${out}\n      .${annotation}`
+    out += `\n      .${annotation}`
   }
   return out
 }
 
-const renderPayload = (operation: ParsedOperation): Codegen.Fragment | undefined => {
+const renderPayload = (operation: ParsedOperation): string | undefined => {
   if (!methodSupportsBody(operation.method)) {
     return
   }
@@ -295,7 +250,7 @@ const renderPayload = (operation: ParsedOperation): Codegen.Fragment | undefined
   }
 
   if (operation.requestBody?.required === false) {
-    payloads.unshift(Codegen.code`${HttpApiSchema}.NoContent`)
+    payloads.unshift("HttpApiSchema.NoContent")
   }
 
   return joinSchemas(payloads)
@@ -304,8 +259,8 @@ const renderPayload = (operation: ParsedOperation): Codegen.Fragment | undefined
 const renderResponseSet = (
   responses: ReadonlyArray<ParsedOperationResponse>,
   target: "success" | "error"
-): Codegen.Fragment | undefined => {
-  const rendered: Array<Codegen.Fragment> = []
+): string | undefined => {
+  const rendered: Array<string> = []
 
   for (const response of responses) {
     const status = toStatus(response.status)
@@ -319,7 +274,7 @@ const renderResponseSet = (
     }
 
     if (response.isEmpty) {
-      rendered.push(Codegen.code`${HttpApiSchema}.Empty(${status})`)
+      rendered.push(`HttpApiSchema.Empty(${status})`)
       continue
     }
 
@@ -335,33 +290,29 @@ const renderResponseSet = (
   return joinSchemas(rendered)
 }
 
-const joinSchemas = (schemas: ReadonlyArray<Codegen.Fragment>): Codegen.Fragment =>
-  schemas.length === 1 ? schemas[0] : Codegen.code`[${Codegen.join(schemas, ", ")}]`
+const joinSchemas = (schemas: ReadonlyArray<string>): string =>
+  schemas.length === 1 ? schemas[0] : `[${schemas.join(", ")}]`
 
-const renderMediaSchema = (media: ParsedOperationMediaTypeSchema): Codegen.Fragment => {
+const renderMediaSchema = (media: ParsedOperationMediaTypeSchema): string => {
   if (media.effectStream === "sse") {
     const options = media.contentType === "text/event-stream"
-      ? Codegen.code`{ events: ${media.schema}, error: ${media.errorSchema} }`
-      : Codegen.code`{ contentType: ${
-        JSON.stringify(media.contentType)
-      }, events: ${media.schema}, error: ${media.errorSchema} }`
-    return Codegen.code`${HttpApiSchema}.StreamSse(${options})`
+      ? `{ events: ${media.schema}, error: ${media.errorSchema} }`
+      : `{ contentType: ${JSON.stringify(media.contentType)}, events: ${media.schema}, error: ${media.errorSchema} }`
+    return `HttpApiSchema.StreamSse(${options})`
   }
 
   if (media.effectStream === "uint8array") {
     if (media.contentType === "application/octet-stream") {
-      return Codegen.code`${HttpApiSchema}.StreamUint8Array()`
+      return "HttpApiSchema.StreamUint8Array()"
     }
-    return Codegen.code`${HttpApiSchema}.StreamUint8Array({ contentType: ${JSON.stringify(media.contentType)} })`
+    return `HttpApiSchema.StreamUint8Array({ contentType: ${JSON.stringify(media.contentType)} })`
   }
 
   if (media.effectStream === "ndjson") {
     if (media.contentType === "application/x-ndjson") {
-      return Codegen.code`${HttpApiSchema}.StreamNdjson({ schema: ${media.schema} })`
+      return `HttpApiSchema.StreamNdjson({ schema: ${media.schema} })`
     }
-    return Codegen.code`${HttpApiSchema}.StreamNdjson({ schema: ${media.schema}, contentType: ${
-      JSON.stringify(media.contentType)
-    } })`
+    return `HttpApiSchema.StreamNdjson({ schema: ${media.schema}, contentType: ${JSON.stringify(media.contentType)} })`
   }
 
   switch (media.encoding) {
@@ -369,68 +320,60 @@ const renderMediaSchema = (media: ParsedOperationMediaTypeSchema): Codegen.Fragm
       if (media.contentType === "application/json") {
         return media.schema
       }
-      return Codegen.code`${media.schema}.pipe(${HttpApiSchema}.asJson({ contentType: ${
-        JSON.stringify(media.contentType)
-      } }))`
+      return `${media.schema}.pipe(HttpApiSchema.asJson({ contentType: ${JSON.stringify(media.contentType)} }))`
     }
     case "multipart": {
-      return Codegen.code`${media.schema}.pipe(${HttpApiSchema}.asMultipart())`
+      return `${media.schema}.pipe(HttpApiSchema.asMultipart())`
     }
     case "form-url-encoded": {
       if (media.contentType === "application/x-www-form-urlencoded") {
-        return Codegen.code`${media.schema}.pipe(${HttpApiSchema}.asFormUrlEncoded())`
+        return `${media.schema}.pipe(HttpApiSchema.asFormUrlEncoded())`
       }
-      return Codegen.code`${media.schema}.pipe(${HttpApiSchema}.asFormUrlEncoded({ contentType: ${
+      return `${media.schema}.pipe(HttpApiSchema.asFormUrlEncoded({ contentType: ${
         JSON.stringify(media.contentType)
       } }))`
     }
     case "text": {
       if (media.contentType === "text/plain") {
-        return Codegen.code`${media.schema}.pipe(${HttpApiSchema}.asText())`
+        return `${media.schema}.pipe(HttpApiSchema.asText())`
       }
-      return Codegen.code`${media.schema}.pipe(${HttpApiSchema}.asText({ contentType: ${
-        JSON.stringify(media.contentType)
-      } }))`
+      return `${media.schema}.pipe(HttpApiSchema.asText({ contentType: ${JSON.stringify(media.contentType)} }))`
     }
     case "binary": {
       if (media.contentType === "application/octet-stream") {
-        return Codegen.code`${media.schema}.pipe(${HttpApiSchema}.asUint8Array())`
+        return `${media.schema}.pipe(HttpApiSchema.asUint8Array())`
       }
-      return Codegen.code`${media.schema}.pipe(${HttpApiSchema}.asUint8Array({ contentType: ${
-        JSON.stringify(media.contentType)
-      } }))`
+      return `${media.schema}.pipe(HttpApiSchema.asUint8Array({ contentType: ${JSON.stringify(media.contentType)} }))`
     }
   }
 }
 
-const renderApiAnnotations = (parsed: ParsedOpenApi): ReadonlyArray<Codegen.Fragment> => {
-  const annotations: Array<Codegen.Fragment> = [
-    Codegen.code`annotate(${OpenApi}.Title, ${JSON.stringify(parsed.metadata.title)})`,
-    Codegen.code`annotate(${OpenApi}.Version, ${JSON.stringify(parsed.metadata.version)})`
+const renderApiAnnotations = (parsed: ParsedOpenApi): ReadonlyArray<string> => {
+  const annotations: Array<string> = [
+    `annotate(OpenApi.Title, ${JSON.stringify(parsed.metadata.title)})`,
+    `annotate(OpenApi.Version, ${JSON.stringify(parsed.metadata.version)})`
   ]
 
   if (parsed.metadata.summary !== undefined) {
-    annotations.push(Codegen.code`annotate(${OpenApi}.Summary, ${JSON.stringify(parsed.metadata.summary)})`)
+    annotations.push(`annotate(OpenApi.Summary, ${JSON.stringify(parsed.metadata.summary)})`)
   }
   if (parsed.metadata.description !== undefined) {
-    annotations.push(Codegen.code`annotate(${OpenApi}.Description, ${JSON.stringify(parsed.metadata.description)})`)
+    annotations.push(`annotate(OpenApi.Description, ${JSON.stringify(parsed.metadata.description)})`)
   }
   if (parsed.metadata.license !== undefined) {
-    annotations.push(Codegen.code`annotate(${OpenApi}.License, ${JSON.stringify(parsed.metadata.license)})`)
+    annotations.push(`annotate(OpenApi.License, ${JSON.stringify(parsed.metadata.license)})`)
   }
   if (parsed.metadata.servers !== undefined) {
-    annotations.push(Codegen.code`annotate(${OpenApi}.Servers, ${JSON.stringify(parsed.metadata.servers)})`)
+    annotations.push(`annotate(OpenApi.Servers, ${JSON.stringify(parsed.metadata.servers)})`)
   }
 
   return annotations
 }
 
-const buildSecurityRenderModel = (
-  parsed: ParsedOpenApi,
-  allocateName: (name: string) => string
-): SecurityRenderModel => {
-  const securityDeclarations: Array<Codegen.Fragment> = []
-  const middlewareDeclarations: Array<Codegen.Fragment> = []
+const buildSecurityRenderModel = (parsed: ParsedOpenApi): SecurityRenderModel => {
+  const allocateName = makeNameAllocator()
+  const securityDeclarations: Array<string> = []
+  const middlewareDeclarations: Array<string> = []
   const endpointMiddlewares = new Map<string, ReadonlyArray<string>>()
   const schemeDeclarations = new Map<string, string>()
   const middlewareNames = new Map<string, string>()
@@ -439,7 +382,7 @@ const buildSecurityRenderModel = (
     const baseName = ensureIdentifier(securityScheme.name, "Security")
     const declarationName = allocateName(`${baseName}Security`)
     schemeDeclarations.set(securityScheme.name, declarationName)
-    securityDeclarations.push(Codegen.code`export const ${declarationName} = ${renderSecurityScheme(securityScheme)}`)
+    securityDeclarations.push(`export const ${declarationName} = ${renderSecurityScheme(securityScheme)}`)
   }
 
   for (const operation of parsed.operations) {
@@ -506,7 +449,7 @@ const buildSecurityRenderModel = (
       ", "
     )
     middlewareDeclarations.push(
-      Codegen.code`export class ${className} extends ${HttpApiMiddleware}.Service<${className}>()(${
+      `export class ${className} extends HttpApiMiddleware.Service<${className}>()(${
         JSON.stringify(`${schemes.join(" | ")} security`)
       }, { security: { ${securityEntries} } }) {}`
     )
@@ -523,7 +466,7 @@ const buildSecurityRenderModel = (
 
     const className = allocateName(`${getSecurityMiddlewareBaseName(schemes, "And")}SecurityMiddleware`)
     middlewareDeclarations.push(
-      Codegen.code`class ${className} extends ${HttpApiMiddleware}.Service<${className}>()(${
+      `class ${className} extends HttpApiMiddleware.Service<${className}>()(${
         JSON.stringify(`${schemes.join(" & ")} security`)
       }) {}`
     )
@@ -540,23 +483,23 @@ const getSecurityMiddlewareBaseName = (
   return tail.length === 0 ? head : [head, ...tail.map((scheme) => `${joiner}${scheme}`)].join("")
 }
 
-const renderSecurityScheme = (securityScheme: ParsedOpenApiSecurityScheme): Codegen.Fragment => {
-  let source: Codegen.Fragment
+const renderSecurityScheme = (securityScheme: ParsedOpenApiSecurityScheme): string => {
+  let source: string
   switch (securityScheme.type) {
     case "basic": {
-      source = Codegen.code`${HttpApiSecurity}.basic`
+      source = "HttpApiSecurity.basic"
       break
     }
     case "bearer": {
-      source = Codegen.code`${HttpApiSecurity}.bearer`
+      source = "HttpApiSecurity.bearer"
       break
     }
     case "http": {
-      source = Codegen.code`${HttpApiSecurity}.http({ scheme: ${JSON.stringify(securityScheme.scheme!)} })`
+      source = `HttpApiSecurity.http({ scheme: ${JSON.stringify(securityScheme.scheme!)} })`
       break
     }
     case "apiKey": {
-      source = Codegen.code`${HttpApiSecurity}.apiKey({ key: ${JSON.stringify(securityScheme.key!)}, in: ${
+      source = `HttpApiSecurity.apiKey({ key: ${JSON.stringify(securityScheme.key!)}, in: ${
         JSON.stringify(securityScheme.in!)
       } })`
       break
@@ -564,16 +507,12 @@ const renderSecurityScheme = (securityScheme: ParsedOpenApiSecurityScheme): Code
   }
 
   if (securityScheme.description !== undefined) {
-    source = Codegen.code`${source}.pipe(${HttpApiSecurity}.annotate(${OpenApi}.Description, ${
-      JSON.stringify(securityScheme.description)
-    }))`
+    source += `.pipe(HttpApiSecurity.annotate(OpenApi.Description, ${JSON.stringify(securityScheme.description)}))`
   }
   if (
     (securityScheme.type === "bearer" || securityScheme.type === "http") && securityScheme.bearerFormat !== undefined
   ) {
-    source = Codegen.code`${source}.pipe(${HttpApiSecurity}.annotate(${OpenApi}.Format, ${
-      JSON.stringify(securityScheme.bearerFormat)
-    }))`
+    source += `.pipe(HttpApiSecurity.annotate(OpenApi.Format, ${JSON.stringify(securityScheme.bearerFormat)}))`
   }
 
   return source
@@ -590,11 +529,11 @@ const toStatus = (status: string): number | undefined => {
   return Number(status)
 }
 
-const applyStatus = (schema: Codegen.Fragment, status: number, target: "success" | "error"): Codegen.Fragment => {
+const applyStatus = (schema: string, status: number, target: "success" | "error"): string => {
   if ((target === "success" && status === 200) || (target === "error" && status === 500)) {
     return schema
   }
-  return Codegen.code`${schema}.pipe(${HttpApiSchema}.status(${status}))`
+  return `${schema}.pipe(HttpApiSchema.status(${status}))`
 }
 
 const methodSupportsBody = (method: ParsedOperation["method"]): boolean =>

@@ -271,7 +271,6 @@ function makeEnvironmentSessionAtoms<R, E>(
     preparedConnectionValueAtom,
     sessionStateAtom,
     sessionStateValueAtom,
-    transportSessionAtom,
   };
 }
 

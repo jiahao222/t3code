@@ -828,11 +828,7 @@ const make = Effect.gen(function* () {
   const revokeConnectDevice: PairingGrantStore["Service"]["revokeConnectDevice"] = Effect.fn(
     "PairingGrantStore.revokeConnectDevice",
   )(function* (proofKeyThumbprint) {
-    yield* revokeUnspentLinks({
-      proofKeyThumbprint,
-      keepProofKeyThumbprint: null,
-      includeUnbound: false,
-    });
+    yield* revokeUnspentLinks({ proofKeyThumbprint, keepProofKeyThumbprint: null });
     const removed = yield* connectDevices
       .remove(proofKeyThumbprint)
       .pipe(Effect.mapError((cause) => new ConnectDevicesError({ operation: "revoke", cause })));
@@ -842,12 +838,7 @@ const make = Effect.gen(function* () {
 
   const revokeConnectDevicesExcept: PairingGrantStore["Service"]["revokeConnectDevicesExcept"] =
     Effect.fn("PairingGrantStore.revokeConnectDevicesExcept")(function* (keepProofKeyThumbprint) {
-      // "Revoke all others" promises every other way in is gone, so unspent codes go too.
-      yield* revokeUnspentLinks({
-        proofKeyThumbprint: null,
-        keepProofKeyThumbprint,
-        includeUnbound: true,
-      });
+      yield* revokeUnspentLinks({ proofKeyThumbprint: null, keepProofKeyThumbprint });
       const removed = yield* connectDevices
         .removeAllExcept(keepProofKeyThumbprint)
         .pipe(Effect.mapError((cause) => new ConnectDevicesError({ operation: "revoke", cause })));

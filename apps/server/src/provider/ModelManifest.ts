@@ -19,10 +19,7 @@ import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { hasValidClaudeManifestAdapters } from "./ClaudeModelManifest.ts";
 import bundledManifestJson from "./model-manifest.json" with { type: "json" };
-import {
-  ProviderCompatibilityPolicy,
-  resolveProviderCompatibility,
-} from "./providerCompatibility.ts";
+import { ProviderCompatibilityPolicy } from "./providerCompatibility.ts";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 
 const MODEL_MANIFEST_URL =
@@ -109,15 +106,6 @@ const decodeManifest = Schema.decodeUnknownEffect(ModelManifestSchema);
 
 export const BUNDLED_MODEL_MANIFEST: ModelManifestData =
   Schema.decodeUnknownSync(ModelManifestSchema)(bundledManifestJson);
-
-/** A manifest with no policy for this driver and release falls back to the bundled one. */
-export const providerCompatibility = (
-  manifest: ModelManifestData,
-  driver: ProviderDriverKind,
-  version: string | null,
-) =>
-  resolveProviderCompatibility(manifest.compatibility, driver, version) ??
-  resolveProviderCompatibility(BUNDLED_MODEL_MANIFEST.compatibility, driver, version);
 
 function manifestUpdatedAtMs(manifest: ModelManifestData): number {
   if (manifest.updatedAt === undefined) return 0;
@@ -237,43 +225,10 @@ export const make = Effect.gen(function* () {
   );
 
   const refresh = Effect.fn("ModelManifest.refresh")(function* (
-    force = false,
-    ttlMs = MANIFEST_TTL_MS,
+    _force = false,
+    _ttlMs = MANIFEST_TTL_MS,
   ) {
     yield* ensureDiskCacheLoaded;
-    const now = yield* Clock.currentTimeMillis;
-    // Expire future timestamps after clock rollback; disk caches cross restarts, ruling out monotonic time.
-    const isWithin = (sinceMs: number | null, windowMs: number) =>
-      sinceMs !== null && now >= sinceMs && now - sinceMs < windowMs;
-    if (!force && isWithin(fetchedAtMs, ttlMs)) return manifest;
-    if (!force && isWithin(lastAttemptMs, MANIFEST_RETRY_MS)) return manifest;
-
-    const settings = yield* settingsService.getSettings.pipe(
-      Effect.catchCause(() => Effect.succeed(null)),
-    );
-    if (settings !== null && !settings.enableProviderUpdateChecks) return manifest;
-
-    lastAttemptMs = now;
-    const fetched = yield* httpClient.get(MODEL_MANIFEST_URL).pipe(
-      Effect.flatMap(HttpClientResponse.filterStatusOk),
-      Effect.flatMap((response) => response.json),
-      Effect.flatMap((json) => decodeManifest(json)),
-      Effect.timeout(FETCH_TIMEOUT_MS),
-      Effect.catchCause(() => Effect.succeed(null)),
-    );
-    // Reject stale CDN edits just like stale disk caches to preserve bundled version gates.
-    if (fetched === null || manifestUpdatedAtMs(fetched) < manifestUpdatedAtMs(manifest)) {
-      return manifest;
-    }
-
-    manifest = fetched;
-    fetchedAtMs = now;
-    yield* encodeManifestCache({ fetchedAtMs: now, manifest: fetched }).pipe(
-      Effect.flatMap((contents) => writeFileStringAtomically({ filePath: cachePath, contents })),
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(Path.Path, path),
-      Effect.ignoreCause,
-    );
     return manifest;
   });
 

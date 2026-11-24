@@ -536,7 +536,7 @@ const stopEarlierBackgroundWork = ({
         (event) =>
           event.type === "run.updated" &&
           event.payload.id === first.runId &&
-          event.payload.status === "completed",
+          event.payload.status === "waiting",
       );
       yield* Queue.offer(events, {
         type: "provider_turn.updated",

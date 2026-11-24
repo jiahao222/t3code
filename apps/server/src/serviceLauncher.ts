@@ -8,8 +8,6 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 import { acquireServiceSelectionLock } from "./cloud/serviceSelectionLock.ts";
-import { RESTORE_OOMD_WATCH_SCRIPT } from "./cloud/userManagerOom.ts";
-import { windowsSystem32Path } from "@t3tools/shared/windowsSystem";
 import { isNoCopyOnWrite, markNoCopyOnWrite } from "./noCopyOnWrite.ts";
 
 import type {
@@ -90,42 +88,6 @@ const runtimeSpawnArguments = (paths: ReturnType<typeof runtimePaths>) => ({
   args: ["serve"],
 });
 
-function isRegularFile(fd: number): boolean {
-  try {
-    return NodeFS.fstatSync(fd).isFile();
-  } catch {
-    return false;
-  }
-}
-
-const MAX_PENDING_OUTPUT_BYTES = 8 * 1024 * 1024;
-
-/**
- * Node writes to a regular file synchronously, so a server whose output is the log file freezes
- * while the filesystem stalls one append. It gets a pipe instead, drained here without backpressure;
- * output beyond the cap is dropped while a write is stuck.
- */
-function appendOutput(source: NodeJS.ReadableStream, fd: number): void {
-  let pending: Array<Buffer> = [];
-  let pendingBytes = 0;
-  let writing = false;
-  const flush = (): void => {
-    writing = pending.length > 0;
-    if (!writing) return;
-    const chunk = Buffer.concat(pending, pendingBytes);
-    pending = [];
-    pendingBytes = 0;
-    // Best effort, like the launcher's own diagnostics: a failed append drops that output.
-    NodeFS.write(fd, chunk, flush);
-  };
-  source.on("data", (chunk: Buffer) => {
-    if (pendingBytes + chunk.length > MAX_PENDING_OUTPUT_BYTES) return;
-    pending.push(chunk);
-    pendingBytes += chunk.length;
-    if (!writing) flush();
-  });
-}
-
 /**
  * The unit or launch agent that `t3 service install` wrote. Its program names
  * the runtime that ran the install, and a remote update never replaces it, so
@@ -138,10 +100,8 @@ export interface ServiceUnit {
   readonly reload: () => Promise<void>;
 }
 
-const SCHTASKS = () => windowsSystem32Path(process.env, "schtasks.exe");
-
 const runSchtasks = (...args: ReadonlyArray<string>) =>
-  NodeUtil.promisify(NodeChildProcess.execFile)(SCHTASKS(), args, {
+  NodeUtil.promisify(NodeChildProcess.execFile)("schtasks", args, {
     windowsHide: true,
     timeout: 30_000,
   });
@@ -228,8 +188,8 @@ async function serviceUnitFromEnvironment(
     );
   return {
     path: NodePath.join(unitDir, unitName),
-    reload: async () => {
-      await new Promise<void>((resolve, reject) => {
+    reload: () =>
+      new Promise((resolve, reject) => {
         NodeChildProcess.spawn("systemctl", ["--user", "daemon-reload"], {
           stdio: "ignore",
           timeout: 30_000,
@@ -240,16 +200,7 @@ async function serviceUnitFromEnvironment(
               ? resolve()
               : reject(new Error(`systemctl --user daemon-reload exited with ${code ?? signal}`)),
           );
-      });
-      await new Promise<void>((resolve) => {
-        NodeChildProcess.spawn("/bin/sh", ["-c", RESTORE_OOMD_WATCH_SCRIPT], {
-          stdio: "ignore",
-          timeout: 30_000,
-        })
-          .once("error", () => resolve())
-          .once("exit", () => resolve());
-      });
-    },
+      }),
   };
 }
 
@@ -883,7 +834,7 @@ export async function stateDirOwned(baseDir: string): Promise<boolean> {
   if (!Number.isFinite(recordedAt)) return true;
   // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone launcher has no Effect runtime.
   const platform = process.platform;
-  const { command, args, env } = legacyOwnerStartTimeCommand(pid, platform, process.env);
+  const { command, args, env } = legacyOwnerStartTimeCommand(pid, platform);
   const output = await new Promise<string | undefined>((resolve) =>
     NodeChildProcess.execFile(
       command,
@@ -1228,17 +1179,13 @@ export class Launcher {
       ...(update === undefined ? {} : { update }),
     };
     const spawnArguments = runtimeSpawnArguments(paths);
-    const appendStdout = this.#output === undefined && isRegularFile(1);
-    const appendStderr = this.#output === undefined && isRegularFile(2);
     const child = NodeChildProcess.spawn(spawnArguments.command, spawnArguments.args, {
       env: { ...this.#environment, [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) },
       stdio:
         this.#output === undefined
-          ? ["inherit", appendStdout ? "pipe" : "inherit", appendStderr ? "pipe" : "inherit", "ipc"]
+          ? ["inherit", "inherit", "inherit", "ipc"]
           : ["ignore", this.#output, this.#output, "ipc"],
     });
-    if (child.stdout !== null) appendOutput(child.stdout, 1);
-    if (child.stderr !== null) appendOutput(child.stderr, 2);
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error) => reject(error);
       child.once("error", onError);
@@ -1419,10 +1366,9 @@ export class Launcher {
         }
         const contents = decodeServiceUnit(await NodeFSP.readFile(unit.path));
         const installedBaseDir = serviceUnitBaseDirOf(contents);
-        const real = (dir: string) => NodeFSP.realpath(dir).catch(() => NodePath.resolve(dir));
         if (
           installedBaseDir === undefined ||
-          (await real(installedBaseDir)) !== (await real(this.#baseDir))
+          NodePath.resolve(installedBaseDir) !== NodePath.resolve(this.#baseDir)
         ) {
           return;
         }
@@ -1657,7 +1603,7 @@ export async function main(options: LauncherOptions = {}): Promise<void> {
     // lets the next repeating trigger start the service again.
     if (windows && options.serviceUnit !== undefined) {
       const taskName = serviceTaskName(process.env.USERDOMAIN ?? "", process.env.USERNAME ?? "");
-      NodeChildProcess.spawnSync(SCHTASKS(), ["/End", "/TN", taskName], {
+      NodeChildProcess.spawnSync("schtasks", ["/End", "/TN", taskName], {
         stdio: "ignore",
         windowsHide: true,
       });

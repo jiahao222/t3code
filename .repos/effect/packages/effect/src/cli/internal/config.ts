@@ -89,7 +89,7 @@ export declare namespace ConfigInternal {
    * Preserves the shape of the user's config object.
    */
   export interface Tree {
-    [key: PropertyKey]: Node
+    [key: string]: Node
   }
 
   /**
@@ -114,7 +114,7 @@ export declare namespace ConfigInternal {
  * @internal
  */
 interface Config {
-  readonly [key: PropertyKey]:
+  readonly [key: string]:
     | Param.Param<Param.ParamKind, any>
     | ReadonlyArray<Param.Param<Param.ParamKind, any> | Config>
     | Config
@@ -137,8 +137,8 @@ export const parseConfig = (config: Config): ConfigInternal => {
 
   function parse(config: Config): ConfigInternal.Tree {
     const tree: ConfigInternal.Tree = Object.create(null)
-    for (const key of InternalRecord.ownEnumerableKeys(config)) {
-      tree[key] = parseValue((config as Record<PropertyKey, Config[string]>)[key])
+    for (const key of Object.keys(config)) {
+      tree[key] = parseValue(config[key])
     }
     return tree
   }
@@ -206,7 +206,7 @@ const shiftNodeIndexes = (node: ConfigInternal.Node, offset: number): ConfigInte
 
 const shiftTreeIndexes = (tree: ConfigInternal.Tree, offset: number): ConfigInternal.Tree => {
   const output: ConfigInternal.Tree = Object.create(null)
-  for (const key of InternalRecord.ownEnumerableKeys(tree)) {
+  for (const key of Object.keys(tree)) {
     output[key] = shiftNodeIndexes(tree[key], offset)
   }
   return output
@@ -244,10 +244,10 @@ export const mergeConfig = (
 export const reconstructTree = (
   tree: ConfigInternal.Tree,
   results: ReadonlyArray<any>
-): Record<PropertyKey, any> => {
-  const output: Record<PropertyKey, any> = {}
+): Record<string, any> => {
+  const output: Record<string, any> = {}
 
-  for (const key of InternalRecord.ownEnumerableKeys(tree)) {
+  for (const key of Object.keys(tree)) {
     InternalRecord.assignProperty(output, key, nodeValue(tree[key]))
   }
 

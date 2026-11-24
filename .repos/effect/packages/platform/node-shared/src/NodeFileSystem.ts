@@ -303,16 +303,12 @@ const makeFile = (() => {
     handleBadArgument("sync")
   )
 
-  const nodeWriteFactory = (method: string) => {
-    const write = effectify(
+  const nodeWriteFactory = (method: string) =>
+    effectify(
       NFS.write,
       handleErrnoException("FileSystem", method),
       handleBadArgument(method)
     )
-    // Bun ignores `position` unless `offset` and `length` are given explicitly.
-    return (fd: number, buffer: Uint8Array, position: number | undefined) =>
-      write(fd, buffer, 0, buffer.length, position)
-  }
   const nodeWrite = nodeWriteFactory("write")
   const nodeWriteAll = nodeWriteFactory("writeAll")
 
@@ -429,7 +425,7 @@ const makeFile = (() => {
           this.append ? Effect.succeed(undefined) : positionToNumber(position, "write"),
           (nodePosition) =>
             Effect.map(
-              nodeWrite(this.fd, buffer, nodePosition),
+              nodeWrite(this.fd, buffer, undefined, undefined, nodePosition),
               (bytesWritten) => {
                 if (!this.append) {
                   this.position = position + BigInt(bytesWritten)
@@ -448,7 +444,7 @@ const makeFile = (() => {
           this.append ? Effect.succeed(undefined) : positionToNumber(position, "writeAll"),
           (nodePosition) =>
             Effect.flatMap(
-              nodeWriteAll(this.fd, buffer, nodePosition),
+              nodeWriteAll(this.fd, buffer, undefined, undefined, nodePosition),
               (bytesWritten) => {
                 if (bytesWritten === 0) {
                   return Effect.fail(

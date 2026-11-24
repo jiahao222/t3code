@@ -70,25 +70,59 @@ export const loadedPolicy = Effect.fn("ManagedPolicy.loadedPolicy")(function* (
  */
 export function deniedBy(
   policy: Pick<ManagedPolicy["Service"], "document">,
-  capability: "webhookTasks" | "telemetry" | "previewTunnel",
+  capability: "webhookTasks" | "telemetry",
 ): string | undefined {
   return policy.document?.limits?.[capability] === false ? policy.document.organization : undefined;
+}
+
+const LOCAL_ONLY_POLICY_FLOOR: ManagedPolicyDocument = {
+  schemaVersion: 1,
+  organization: "Local-Only Build",
+  limits: {
+    clients: ["desktop", "local-browser"],
+    connect: false,
+    webhookTasks: false,
+    telemetry: false,
+    updates: {
+      mode: "off",
+      allowNightly: false,
+    },
+  },
+};
+
+function enforceLocalOnlyPolicy(document: ManagedPolicyDocument | undefined): ManagedPolicyDocument {
+  if (document === undefined) {
+    return LOCAL_ONLY_POLICY_FLOOR;
+  }
+  const existingClients = document.limits?.clients;
+  const kept =
+    existingClients === undefined
+      ? (["desktop", "local-browser"] as const)
+      : existingClients.filter((client): client is "desktop" | "local-browser" => client !== "remote");
+  const filteredClients: readonly ["desktop" | "local-browser", ...Array<"desktop" | "local-browser">] =
+    kept.length > 0 ? [kept[0]!, ...kept.slice(1)] : ["desktop"];
+  return {
+    ...document,
+    limits: {
+      ...document.limits,
+      clients: filteredClients,
+      connect: false,
+      webhookTasks: false,
+      telemetry: false,
+      updates: {
+        mode: "off",
+        allowNightly: false,
+      },
+    },
+  };
 }
 
 /** Build the service from a decoded document; fails when the document cannot be enforced. */
 export const fromDocument = Effect.fn("ManagedPolicy.fromDocument")(function* (
   path: string,
-  document: ManagedPolicyDocument | undefined,
+  rawDocument: ManagedPolicyDocument | undefined,
 ) {
-  if (document === undefined) {
-    return ManagedPolicy.of({
-      path,
-      document: undefined,
-      settings: ManagedSettings.unmanagedSettings,
-      providers: ManagedProviders.unmanagedProviders,
-      summary: undefined,
-    });
-  }
+  const document = enforceLocalOnlyPolicy(rawDocument);
   const maxRuntimeMode = document.limits?.maxRuntimeMode;
   const settings = ManagedSettings.makeManagedSettings(document.settings ?? {}, maxRuntimeMode);
   if (settings._tag === "Invalid") {
@@ -135,7 +169,6 @@ function summarizeLimits(
     webhookTasks,
     telemetry,
     browserCookieImport,
-    previewTunnel,
     providers,
     updates,
   } = document.limits ?? {};
@@ -147,7 +180,6 @@ function summarizeLimits(
     ...(webhookTasks === undefined ? {} : { webhookTasks }),
     ...(telemetry === undefined ? {} : { telemetry }),
     ...(browserCookieImport === undefined ? {} : { browserCookieImport }),
-    ...(previewTunnel === undefined ? {} : { previewTunnel }),
     ...(providers?.allowedDrivers === undefined && Object.keys(lockedInstanceFields).length === 0
       ? {}
       : {

@@ -103,7 +103,6 @@ function TerminalHeader(props: {
   readonly sessions: ReadonlyArray<TerminalMenuSession>;
   readonly status: Parameters<typeof getTerminalStatusLabel>[0];
   readonly workspaceRoot: string;
-  readonly onBack: () => void;
   readonly onCloseTerminal: () => void;
   readonly onDecreaseFontSize: () => void;
   readonly onIncreaseFontSize: () => void;
@@ -116,26 +115,11 @@ function TerminalHeader(props: {
     <AppBar
       title={gt("Terminal", { $context: "screen title" })}
       subtitle={props.subtitle}
-      onBack={props.onBack}
+      onBack={props.onCloseTerminal}
       backInSplitView={{
         accessibilityLabel: gt("Back to chat"),
         icon: "chevron.left",
       }}
-      actions={
-        Platform.OS === "android" && props.isEnvironmentReady
-          ? [
-              {
-                accessibilityLabel: gt("Close terminal"),
-                icon: "trash",
-                // Tabler's trash is 18 units tall; the terminal glyph beside it is 16.
-                iconScale: 16 / 18,
-                destructive: true,
-                disabled: !props.canOperateTerminal,
-                onPress: props.onCloseTerminal,
-              },
-            ]
-          : undefined
-      }
       menus={
         props.isEnvironmentReady
           ? [
@@ -216,12 +200,7 @@ function TerminalHeader(props: {
 
 const DEFAULT_TERMINAL_COLS = 80;
 const DEFAULT_TERMINAL_ROWS = 24;
-const TERMINAL_ACCESSORY_VERTICAL_PADDING = 4;
-const TERMINAL_ACCESSORY_BORDER_WIDTH = 1;
-const TERMINAL_ACCESSORY_HEIGHT =
-  (Platform.OS === "android" ? 48 : 44) +
-  TERMINAL_ACCESSORY_VERTICAL_PADDING * 2 +
-  TERMINAL_ACCESSORY_BORDER_WIDTH;
+const TERMINAL_ACCESSORY_HEIGHT = 52;
 const SHOWCASE_ENABLED = process.env.EXPO_PUBLIC_SHOWCASE === "1";
 
 class TerminalClipboardReadError extends Schema.TaggedError<TerminalClipboardReadError>()(
@@ -427,7 +406,6 @@ function ThreadTerminal(props: {
   const navigation = useNavigation();
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const clearTerminal = useAtomCommand(terminalEnvironment.clear, "terminal clear");
-  const closeTerminal = useAtomCommand(terminalEnvironment.close, "terminal close");
   const retryEnvironment = useRetryEnvironment();
   const selectedThreadDetail = useSelectedThreadProjection();
   const selectedThreadDetailWorktreePath =
@@ -739,7 +717,7 @@ function ThreadTerminal(props: {
     );
   };
 
-  const handleBack = () => {
+  const handleCloseTerminal = () => {
     if (navigation.canGoBack()) {
       navigation.goBack();
       return;
@@ -750,26 +728,6 @@ function ThreadTerminal(props: {
         threadId: params.threadId,
       }),
     );
-  };
-
-  const handleCloseTerminal = () => {
-    Dialog.confirm({
-      title: gt('Close terminal "{label}"?', {
-        label: resolveTerminalSessionLabel(terminalId, terminal.summary),
-      }),
-      message: gt("This stops the running process and clears its history."),
-      confirmText: gt("Confirm"),
-      destructive: true,
-      onConfirm: async () => {
-        if (!readEnvironmentScope(selectedThread.environmentId, AuthTerminalOperateScope)) return;
-        const result = await closeTerminal({
-          environmentId: selectedThread.environmentId,
-          input: { threadId: selectedThread.id, terminalId, deleteHistory: true },
-        });
-        if (AsyncResult.isSuccess(result)) exitNavigation.exited();
-        else Dialog.alert(gt("Couldn't close terminal"), gt("Check the connection and try again."));
-      },
-    });
   };
 
   const handleOpenNewTerminal = () => {
@@ -902,7 +860,6 @@ function ThreadTerminal(props: {
           hasRunningSubprocess: terminal.hasRunningSubprocess,
         }}
         workspaceRoot={selectedThreadProject.workspaceRoot}
-        onBack={handleBack}
         onCloseTerminal={handleCloseTerminal}
         onDecreaseFontSize={handleDecreaseFontSize}
         onIncreaseFontSize={handleIncreaseFontSize}
@@ -1045,7 +1002,7 @@ function ThreadTerminal(props: {
                     KeyboardController.dismiss();
                     requestCapture();
                   }}
-                  className="min-h-[44px] justify-center px-4 pt-2"
+                  className="px-4 pt-2"
                   style={{
                     paddingBottom:
                       8 +
@@ -1072,11 +1029,7 @@ function ThreadTerminal(props: {
                       minHeight: TERMINAL_ACCESSORY_HEIGHT,
                     }}
                   >
-                    <ComposerToolbarRow
-                      paddingBottom={TERMINAL_ACCESSORY_VERTICAL_PADDING}
-                      paddingHorizontal={8}
-                      paddingTop={TERMINAL_ACCESSORY_VERTICAL_PADDING}
-                    >
+                    <ComposerToolbarRow paddingBottom={4} paddingHorizontal={8} paddingTop={4}>
                       <ComposerToolbarScroller
                         contentPaddingRight={2}
                         fadeOpaque={terminalTheme.background}

@@ -62,8 +62,8 @@ export interface TranscriptUsageFormat<State> {
   readonly usageMarkers: readonly [string, ...string[]];
   parseLine(line: string, state: State): readonly UsageRecord[];
   parseProjected(projected: unknown, state: State): readonly UsageRecord[];
-  /** Timestamps of malformed or inconsistent usage records, including skipped records. */
-  readMalformedRecords?(state: State): readonly number[];
+  /** Cumulative malformed or inconsistent usage records, including skipped records. */
+  readMalformedRecords?(state: State): number;
   /**
    * Present for formats whose records depend on earlier lines. The state at a
    * resume point is persisted in the scan cache through `schema`, so a grown
@@ -86,6 +86,7 @@ export interface ProviderUsageInstance<Config> {
 }
 
 export interface ProviderUsageScan {
+  readonly providerInstanceId?: ProviderInstanceId;
   readonly dir: string;
   readonly volumeId?: string;
   readonly hostId?: string;

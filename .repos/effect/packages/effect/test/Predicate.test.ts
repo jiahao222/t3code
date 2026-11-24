@@ -1,7 +1,6 @@
-import { assert as testAssert, describe, it } from "@effect/vitest"
+import { describe, it } from "@effect/vitest"
 import { Function as Fun, pipe, Predicate } from "effect"
 import assert from "node:assert/strict"
-import { withIgnoredProperties } from "./utils/structFields.ts"
 
 const isPositive: Predicate.Predicate<number> = (n) => n > 0
 const isNegative: Predicate.Predicate<number> = (n) => n < 0
@@ -87,19 +86,6 @@ describe("Tuple", () => {
 })
 
 describe("Struct", () => {
-  it("discovers enumerable own fields and reads non-enumerable input fields", () => {
-    const rank = Symbol("rank")
-    const check = Predicate.Struct(withIgnoredProperties({ name: Predicate.isString, [rank]: Predicate.isNumber }))
-    const input = Object.defineProperties({ name: "a", [rank]: 1 }, {
-      name: { enumerable: false },
-      [rank]: { enumerable: false }
-    })
-
-    testAssert.isTrue(check(input))
-    testAssert.isFalse(check({ name: "a", [rank]: "invalid" }))
-    testAssert.isFalse(check({ name: 1, [rank]: 1 }))
-  })
-
   it("returns true only when all field predicates succeed", () => {
     const p = Predicate.Struct({ a: isPositive, b: isNegative })
 

@@ -6,9 +6,6 @@
  * closes. This module includes scoped runtime constructors plus helpers for
  * adding, clearing, running, counting, joining, and waiting for managed fibers.
  *
- * A fiber's success or failure does not interrupt the other fibers or close
- * the set. The set removes the completed fiber and keeps accepting new ones.
- *
  * @stability stable
  * @since 2.0.0
  */
@@ -180,7 +177,6 @@ export const make = <A = unknown, E = unknown>(): Effect.Effect<FiberSet<A, E>, 
  *
  * Each call returns the forked fiber and adds it to the set. Managed fibers are
  * removed when they complete and are interrupted when the set's scope closes.
- * The returned function starts fibers like `Effect.runForkWith`.
  *
  * **Example** (Creating a scoped runtime)
  *
@@ -232,7 +228,6 @@ export const makeRuntime = <R = never, A = unknown, E = unknown>(): Effect.Effec
  * Managed fibers are removed when they complete and are interrupted when the
  * set's scope closes. Each Promise resolves with the effect's success value or
  * rejects with the squashed failure cause.
- * The returned function starts fibers like `Effect.runForkWith`.
  *
  * **Example** (Creating a promise runtime)
  *
@@ -364,11 +359,6 @@ export const addUnsafe: {
 /**
  * Adds a fiber to the FiberSet. When the fiber completes, it will be removed.
  *
- * **Details**
- *
- * Set `propagateInterruption: true` to report external interruptions to
- * {@link join}.
- *
  * **Example** (Adding a fiber)
  *
  * ```ts import.meta.vitest
@@ -469,26 +459,8 @@ const constInterruptedFiber = (function() {
 
 /**
  * Forks an Effect and adds the fiber to the FiberSet. The fiber is removed
- * when it completes.
- *
- * **Details**
- *
- * The new fiber starts interruptible, even when the caller is uninterruptible.
- * By default, it runs synchronously until it suspends, yields, or completes
- * before `run` returns. Set `startImmediately: false` to defer startup as in
- * `Effect.forkChild`.
- *
- * The set owns the fiber, not the caller: it can outlive the caller's
- * completion or interruption. Forking and registration are interruption-safe,
- * so caller interruption cannot leave the fiber untracked. Closing the owning
- * scope from another fiber interrupts managed fibers and awaits their finalizers.
- *
- * Set `propagateInterruption: true` to report external interruptions to
- * {@link join}.
- *
- * **Gotchas**
- *
- * Uninterruptible work can delay scope closure.
+ * when it completes. Set `startImmediately: false` to defer startup. By default,
+ * the effect starts immediately.
  *
  * **Example** (Forking effects into a set)
  *
@@ -566,10 +538,6 @@ const runImpl = <A, E, R, XE extends E, XA extends A>(
 /**
  * Captures a `Runtime` and uses it to fork effects into the `FiberSet`.
  *
- * **Details**
- *
- * The returned function starts fibers like `Effect.runForkWith`.
- *
  * **Example** (Capturing a runtime)
  *
  * ```ts import.meta.vitest
@@ -644,7 +612,6 @@ export const runtime: <A, E>(
  * **Details**
  *
  * The returned run function returns a `Promise` for each effect result.
- * The returned function starts fibers like `Effect.runForkWith`.
  *
  * **Example** (Running effects as promises)
  *
@@ -735,17 +702,8 @@ export const size = <A, E>(self: FiberSet<A, E>): Effect.Effect<number> =>
   Effect.sync(() => self.state._tag === "Closed" ? 0 : self.state.backing.size)
 
 /**
- * Waits for the `FiberSet` to fail or close.
- *
- * **Details**
- *
- * Fails with the first recorded fiber failure. A successful fiber is removed
- * without completing `join`; use {@link awaitEmpty} to wait for an empty set.
- *
- * By default, failures caused only by interruption are ignored. If the fiber
- * was registered with `propagateInterruption: true`, its interruption is
- * recorded unless the set itself interrupted it, as on scope closure or
- * `clear`.
+ * Joins all fibers in the FiberSet. If any fiber in the set terminates with a failure,
+ * the returned Effect will terminate with the first failure that occurred.
  *
  * **Example** (Joining failing fibers)
  *

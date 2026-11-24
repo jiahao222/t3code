@@ -7,16 +7,13 @@ import {
   type PullRequestDetailView,
 } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
-import { page, userEvent } from "vite-plus/test/browser";
-import appCss from "~/index.css?inline";
+import { userEvent } from "vite-plus/test/browser";
 import { DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { act, fakeTimers, render } from "../../../test/render";
 
-const { command, permissions, reads, shown } = vi.hoisted(() => ({
-  command: vi.fn(),
+const { permissions, reads } = vi.hoisted(() => ({
   permissions: { checkout: true, operate: true },
   reads: { diff: [] as unknown[] },
-  shown: { detail: null as PullRequestDetailView | null },
 }));
 
 vi.mock(import("~/state/session"), async (original) => ({
@@ -41,9 +38,9 @@ vi.mock(import("./usePullRequestDetail"), async (original) => ({
     detailQuery: { isPending: false, refresh: vi.fn() },
     activityQuery: { isPending: false, refresh: vi.fn(), error: null },
     activity: null,
-    sharedSummary: shown.detail,
-    coreDetail: shown.detail,
-    detail: shown.detail,
+    sharedSummary: detail,
+    coreDetail: detail,
+    detail,
   })) as never,
 }));
 vi.mock(import("~/state/usePullRequestStack"), async (original) => ({
@@ -71,10 +68,9 @@ vi.mock(import("~/state/pullRequests"), async (original) => {
 });
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
-  useAtomCommand: (() => command) as never,
+  useAtomCommand: (() => vi.fn()) as never,
 }));
 
-import { createWorkspaceFocusController, workspaceAreaProps } from "~/lib/workspaceFocus";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 
 const detail: PullRequestDetailView = {
@@ -131,10 +127,10 @@ const detail: PullRequestDetailView = {
 
 const environmentId = EnvironmentId.make("environment");
 const draftId = DraftId.make("conflicts-draft");
-const panel = (attach = false, reference = detail) => (
+const panel = (attach = false) => (
   <PullRequestDetailPanel
     environmentId={environmentId}
-    reference={reference}
+    reference={detail}
     context="page"
     shortcutsEnabled={false}
     getShortcutContext={() => ({
@@ -153,8 +149,6 @@ function setup() {
   permissions.checkout = true;
   permissions.operate = true;
   reads.diff = [];
-  shown.detail = detail;
-  command.mockReset();
   useComposerDraftStore.setState({ draftsByThreadKey: {} });
 }
 
@@ -185,62 +179,6 @@ it("can still add conflict resolution to an existing composer without checkout s
   expect(draft?.prompt).toContain(detail.url);
 });
 
-it("keeps a merge and a review on the head the reader was shown until they load new commits", async () => {
-  setup();
-  command.mockResolvedValue({ _tag: "Success", value: undefined });
-  const at = (headSha: string): PullRequestDetailView => ({
-    ...detail,
-    headSha,
-    mergeability: "mergeable",
-    mergeCapabilities: { merge: false, squash: true, rebase: false },
-    capabilities: {
-      ...detail.capabilities,
-      actions: ["merge"],
-      mergeMethods: ["squash"],
-      review: { ...detail.capabilities.review, verdicts: ["approve"] },
-    },
-    viewerPermissions: { ...detail.viewerPermissions, actions: ["merge"], verdicts: ["approve"] },
-  });
-  const sent = (key: "action" | "verdict") =>
-    command.mock.calls.flatMap(([call]) =>
-      call?.input?.[key] === undefined ? [] : [call.input.expectedHeadSha],
-    );
-  const merge = async () => {
-    await screen.getByRole("button", { name: "Squash and merge" }).click();
-    await screen.getByRole("button", { name: "Confirm merge?" }).click();
-  };
-  shown.detail = at("shown-head");
-  await using screen = await render(panel());
-  await expect.element(screen.getByRole("button", { name: "Squash and merge" })).toBeVisible();
-  // A background refresh brings a push the reader has not looked at.
-  shown.detail = at("pushed-head");
-  await screen.rerender(panel());
-  await expect.element(screen.getByText(/still applies to shown-h/)).toBeVisible();
-  await merge();
-  await screen.getByRole("button", { name: "Review pull request" }).click();
-  // The composer popup is portalled outside the rendered tree.
-  await page.getByRole("button", { name: "Submit review" }).click();
-  await vi.waitFor(() => expect(sent("verdict")).toEqual(["shown-head"]));
-  expect(sent("action")).toEqual(["shown-head"]);
-
-  // The pin moves once the reload has been asked of the host, not at the click.
-  const reload = Promise.withResolvers<{ _tag: "Success"; value: undefined }>();
-  command.mockImplementation((call) =>
-    call?.input?.reference === undefined
-      ? Promise.resolve({ _tag: "Success", value: undefined })
-      : reload.promise,
-  );
-  await screen.getByRole("button", { name: "Load new commits" }).click();
-  await merge();
-  await vi.waitFor(() => expect(sent("action")).toEqual(["shown-head", "shown-head"]));
-  reload.resolve({ _tag: "Success", value: undefined });
-  await expect.element(screen.getByText(/still applies to/)).not.toBeInTheDocument();
-  await merge();
-  await vi.waitFor(() =>
-    expect(sent("action")).toEqual(["shown-head", "shown-head", "pushed-head"]),
-  );
-});
-
 it("reads the first diff page once the pointer rests on the Code tab", async () => {
   setup();
   await using screen = await render(panel());
@@ -257,42 +195,4 @@ it("reads the first diff page once the pointer rests on the Code tab", async () 
     environmentId,
     input: { projectId: detail.projectId, repository: detail.repository, number: detail.number },
   });
-});
-
-it("keeps a screen reader's place when scrolling the description condenses the header", async () => {
-  setup();
-  shown.detail = {
-    ...detail,
-    body: Array.from({ length: 80 }, (_, line) => `Line ${line}`).join("\n\n"),
-  };
-  const style = document.createElement("style");
-  style.textContent = appCss;
-  document.head.append(style);
-  using _style = { [Symbol.dispose]: () => style.remove() };
-  const controller = createWorkspaceFocusController(document);
-  using _controller = { [Symbol.dispose]: () => controller.dispose() };
-  await using screen = await render(
-    <div {...workspaceAreaProps("pull-requests", 1)} className="flex h-[600px] flex-col">
-      {panel()}
-    </div>,
-  );
-  const openOnHost = screen.getByRole("button", { name: "Open pull request #1 on host" });
-  await expect.element(openOnHost).toBeVisible();
-  const expanded = openOnHost.element() as HTMLButtonElement;
-  expanded.focus();
-  await expect.element(screen.getByText("Line 79")).toBeInTheDocument();
-  let scroller = screen.getByText("Line 79").element().parentElement;
-  while (scroller && getComputedStyle(scroller).overflowY !== "auto") {
-    scroller = scroller.parentElement;
-  }
-  using _timers = fakeTimers();
-  using moves = vi.spyOn(HTMLElement.prototype, "focus");
-  // Browse mode scrolls a heading into view without moving DOM focus.
-  await act(() => {
-    scroller!.scrollTop = scroller!.scrollHeight;
-  });
-  await vi.waitFor(() => expect(expanded.closest("[inert]")).not.toBeNull());
-  await act(() => vi.advanceTimersToNextFrame());
-  // A programmatic focus() pulls the screen reader's browse cursor back to the header.
-  expect(moves).not.toHaveBeenCalled();
 });

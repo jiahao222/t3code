@@ -225,34 +225,7 @@ function originalPositionFor(
  * the composed map's generated column. On iOS the path is absolute, and an OTA bundle's
  * contains a space (`Application Support`).
  */
-const FRAME_MARKER = "address at ";
-const FRAME_POSITION = /:(\d+):(\d+)\)?$/u;
-
-/**
- * One anchored match and a few scans instead of `/address at (.+?):(\d+):(\d+)(?=\)?$)/`, which
- * retries from every marker and is quadratic on a line of them. Telemetry is unauthenticated.
- */
-function bundleFrame(line: string) {
-  const position = FRAME_POSITION.exec(line);
-  if (!position) return null;
-  // `.` stops at these, so a path never spans one.
-  const lineBreak = Math.max(
-    line.lastIndexOf("\r", position.index),
-    line.lastIndexOf("\u2028", position.index),
-    line.lastIndexOf("\u2029", position.index),
-  );
-  const index = line.indexOf(FRAME_MARKER, lineBreak + 1);
-  const pathStart = index + FRAME_MARKER.length;
-  if (index === -1 || pathStart >= position.index) return null;
-  return {
-    index,
-    path: line.slice(pathStart, position.index),
-    line: Number(position[1]),
-    column: Number(position[2]),
-    /** After the column, before a closing parenthesis. */
-    end: line.length - (line.endsWith(")") ? 1 : 0),
-  };
-}
+const BUNDLE_FRAME = /address at (.+?):(\d+):(\d+)(?=\)?$)/u;
 /** Hermes's own runtime, not in the map. */
 const HERMES_RUNTIME = "InternalBytecode.js";
 
@@ -263,10 +236,10 @@ export function stripBundlePaths(stack: string): string {
   return stack
     .split("\n")
     .map((line) => {
-      const frame = bundleFrame(line);
-      if (!frame || !frame.path.includes("/")) return line;
-      const start = frame.index + FRAME_MARKER.length;
-      return line.slice(0, start) + baseName(frame.path) + line.slice(start + frame.path.length);
+      const match = BUNDLE_FRAME.exec(line);
+      if (!match || !match[1]!.includes("/")) return line;
+      const start = match.index + "address at ".length;
+      return line.slice(0, start) + baseName(match[1]!) + line.slice(start + match[1]!.length);
     })
     .join("\n");
 }
@@ -292,14 +265,14 @@ export function symbolicateStack(
   let growth = 0;
   let exhausted = false;
   const lines = stack.split("\n").map((line) => {
-    const frame = bundleFrame(line);
-    if (!frame || baseName(frame.path) === HERMES_RUNTIME) return line;
+    const match = BUNDLE_FRAME.exec(line);
+    if (!match || baseName(match[1]!) === HERMES_RUNTIME) return line;
     bundleFrames += 1;
     if (exhausted) return line;
-    const position = originalPositionFor(map, frame.line, frame.column);
+    const position = originalPositionFor(map, Number(match[2]), Number(match[3]));
     if (!position) return line;
     const lineAndColumn = `:${position.line}:${position.column + 1}`;
-    const added = position.source.length + lineAndColumn.length - (frame.end - frame.index);
+    const added = position.source.length + lineAndColumn.length - match[0].length;
     if (growth + added > maxGrowth) {
       exhausted = true;
       return line;
@@ -307,7 +280,8 @@ export function symbolicateStack(
     growth += added;
     mappedFrames += 1;
     // Spliced, not `replace`d: a replacement string would expand `$&` and `$'` in the path.
-    return line.slice(0, frame.index) + position.source + lineAndColumn + line.slice(frame.end);
+    const end = match.index + match[0].length;
+    return line.slice(0, match.index) + position.source + lineAndColumn + line.slice(end);
   });
   return { stack: lines.join("\n"), bundleFrames, mappedFrames, growth };
 }

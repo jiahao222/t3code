@@ -63,13 +63,7 @@ import { toHostDrivePath } from "../workspace/hostDrivePath.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import { extractIcnsPng } from "./icns.ts";
-import {
-  mediaFileRevision,
-  openMediaFile,
-  readMediaFileHeader,
-  type OpenMediaFile,
-} from "./MediaFile.ts";
-import * as WorkspacePreviewRevisions from "./WorkspacePreviewRevisions.ts";
+import { openMediaFile, readMediaFileHeader, type OpenMediaFile } from "./MediaFile.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
@@ -135,8 +129,6 @@ const AssetClaimsSchema = Schema.Union([
     kind: Schema.Literal("workspace-file"),
     workspaceRoot: Schema.String,
     baseRelativePath: Schema.String,
-    /** The opened page, which the files it requests are tracked under; absent on older URLs. */
-    entryFileName: Schema.optionalKey(Schema.String),
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -287,8 +279,6 @@ const readToolOutputImage = Effect.fn("AssetAccess.readToolOutputImage")(functio
 const projectFaviconAsset = Effect.fn("AssetAccess.projectFaviconAsset")(function* (
   filePath: string,
 ) {
-  // Checked again here: a link can be repointed after its URL was issued.
-  if (!isProjectFaviconPath(filePath)) return null;
   if (!filePath.toLowerCase().endsWith(".icns")) {
     return { kind: "file", path: filePath } satisfies ResolvedAsset;
   }
@@ -444,8 +434,7 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
       });
     }
     const download =
-      (input.resource._tag === "media-file" || input.resource._tag === "draft-workspace-file") &&
-      input.resource.disposition === "attachment";
+      input.resource._tag === "media-file" && input.resource.disposition === "attachment";
     if (!download && hostPreviewMimeTypeFromExtension(path.extname(canonicalFile)) === null) {
       return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
     }
@@ -460,7 +449,7 @@ const finalizeAbsoluteMediaFileAsset = Effect.fn("AssetAccess.finalizeAbsoluteMe
                 : Effect.succeed(null),
               (dimensions) => ({
                 identity: { device: file.info.dev.toString(), inode: file.info.ino.toString() },
-                fileRevision: mediaFileRevision(file.info),
+                fileRevision: `${file.info.dev}:${file.info.ino}:${file.info.size}:${file.info.mtimeNs}:${file.info.ctimeNs}`,
                 dimensions,
               }),
             ),
@@ -518,8 +507,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
       );
     const isDraftMedia =
       input.resource._tag === "draft-workspace-file" &&
-      (input.resource.disposition === "attachment" ||
-        isWorkspaceAudioPreviewPath(resolved.relativePath) ||
+      (isWorkspaceAudioPreviewPath(resolved.relativePath) ||
         isWorkspaceVideoPreviewPath(resolved.relativePath));
     if (!isDraftMedia && !isWorkspacePreviewEntryPath(resolved.relativePath)) {
       return yield* new AssetPreviewTypeValidationError({
@@ -550,12 +538,6 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
         expectedCanonicalPath: canonicalFile,
       });
     }
-    // The response type follows the file a link points at, so that file must be previewable too.
-    if (!isWorkspacePreviewEntryPath(canonicalFile)) {
-      return yield* new AssetPreviewTypeValidationError({
-        resource: input.resource,
-      });
-    }
     const canonicalWorkspaceRoot = yield* fileSystem.realPath(input.workspaceRoot).pipe(
       Effect.mapError(
         (cause) =>
@@ -570,36 +552,25 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
     )
       ? yield* readImageDimensionsFromHeader(canonicalFile)
       : null;
-    if (!/\.html?$/i.test(resolved.relativePath)) {
-      return {
-        claims: {
-          version: 1 as const,
-          kind: "workspace-file-exact" as const,
-          workspaceRoot: canonicalWorkspaceRoot,
-          relativePath: resolved.relativePath,
-          expiresAt: input.expiresAt,
-        },
-        fileName: path.basename(resolved.relativePath),
-        imageDimensions,
-        fileRevision: undefined,
-      };
-    }
-    const revisions = yield* WorkspacePreviewRevisions.WorkspacePreviewRevisions;
     return {
-      claims: {
-        version: 1 as const,
-        kind: "workspace-file" as const,
-        workspaceRoot: canonicalWorkspaceRoot,
-        baseRelativePath: path.dirname(resolved.relativePath),
-        entryFileName: path.basename(resolved.relativePath),
-        expiresAt: input.expiresAt,
-      },
+      claims: !/\.html?$/i.test(resolved.relativePath)
+        ? {
+            version: 1 as const,
+            kind: "workspace-file-exact" as const,
+            workspaceRoot: canonicalWorkspaceRoot,
+            relativePath: resolved.relativePath,
+            expiresAt: input.expiresAt,
+          }
+        : {
+            version: 1 as const,
+            kind: "workspace-file" as const,
+            workspaceRoot: canonicalWorkspaceRoot,
+            baseRelativePath: path.dirname(resolved.relativePath),
+            expiresAt: input.expiresAt,
+          },
       fileName: path.basename(resolved.relativePath),
       imageDimensions,
-      fileRevision: yield* revisions.revision({
-        workspaceRoot: canonicalWorkspaceRoot,
-        entryRelativePath: resolved.relativePath,
-      }),
+      fileRevision: undefined,
     };
   },
 );
@@ -677,7 +648,6 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       claims = finalized.claims;
       fileName = finalized.fileName;
       imageDimensions = finalized.imageDimensions;
-      fileRevision = finalized.fileRevision;
       break;
     }
     case "draft-workspace-file": {
@@ -825,10 +795,6 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         return yield* new AssetProjectFaviconNotFoundError({
           resource: input.resource,
         });
-      }
-      // A favicon link must resolve to an image file.
-      if (canonicalFaviconPath && !isProjectFaviconPath(canonicalFaviconPath)) {
-        return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
       }
       claims =
         isExternalOverride && canonicalFaviconPath
@@ -1125,25 +1091,13 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       workspaceRoot: claims.workspaceRoot,
       relativePath: claims.relativePath,
     });
-    // Checked again here: a link can be repointed after its URL was issued.
-    return exactWorkspaceFile && isWorkspacePreviewEntryPath(exactWorkspaceFile)
+    return exactWorkspaceFile
       ? ({ kind: "file", path: exactWorkspaceFile } satisfies ResolvedAsset)
       : null;
   }
   if (!isPreviewDependencyPath(decodedPath, path)) return null;
   const joinedRelativePath =
     claims.baseRelativePath === "." ? decodedPath : path.join(claims.baseRelativePath, decodedPath);
-  if (claims.entryFileName !== undefined) {
-    // Before the file is resolved and read, so the recorded state is never newer than the response.
-    const revisions = yield* WorkspacePreviewRevisions.WorkspacePreviewRevisions;
-    yield* revisions.observe(
-      {
-        workspaceRoot: claims.workspaceRoot,
-        entryRelativePath: path.join(claims.baseRelativePath, claims.entryFileName),
-      },
-      joinedRelativePath,
-    );
-  }
   const workspaceFile = yield* resolveCanonicalWorkspaceFileForRequest({
     workspaceRoot: claims.workspaceRoot,
     relativePath: joinedRelativePath,

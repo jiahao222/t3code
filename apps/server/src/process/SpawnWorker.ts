@@ -8,7 +8,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { supportsEnvChdir } from "@t3tools/shared/envTrampoline";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { windowsSystem32Path } from "@t3tools/shared/windowsSystem";
 
 // Windows runs CreateProcess synchronously on the calling thread, and antivirus or a busy disk can
 // hold it for seconds; Linux's spawn waits for chdir and the PATH search, which a hung mount
@@ -182,7 +181,6 @@ class WorkerChild
   killed = false;
   spawned = false;
   exited = false;
-  killsTree = false;
   readonly #writes = new Map<number, Array<(error?: Error | null) => void>>();
   readonly #finals = new Map<number, (error?: Error | null) => void>();
   readonly #paused = new Set<number>();
@@ -270,8 +268,7 @@ class WorkerChild
   kill(signal: NodeJS.Signals | number = "SIGTERM"): boolean {
     if (this.exited) return false;
     this.killed = true;
-    if (this.killsTree && this.pid !== undefined) this.worker.pool.killTree(this.pid, () => {});
-    else this.worker.post({ type: "kill", id: this.id, signal });
+    this.worker.post({ type: "kill", id: this.id, signal });
     return true;
   }
 
@@ -506,14 +503,10 @@ class SpawnWorkerPool {
       if (!killed) killPid();
       done();
     };
-    this.spawn(
-      windowsSystem32Path(process.env, "taskkill.exe"),
-      ["/pid", String(pid), "/T", "/F"],
-      {
-        stdio: "ignore",
-        windowsHide: true,
-      },
-    )
+    this.spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    })
       .on("error", () => finish(false))
       .on("exit", (code) => finish(code === 0));
   }
@@ -544,19 +537,15 @@ export const spawnPiped = (
   command: string,
   args: ReadonlyArray<string>,
   options: Omit<NodeChildProcess.SpawnOptions, "stdio">,
-) => {
-  const child = (sharedPool ??= new SpawnWorkerPool("win32")).spawn(command, args, {
+) =>
+  (sharedPool ??= new SpawnWorkerPool("win32")).spawn(command, args, {
     ...options,
     stdio: ["pipe", "pipe", "pipe"],
-  });
-  // Windows has no process groups: ending only the CLI leaves its background shells running.
-  child.killsTree = true;
-  return child as WorkerChild & {
+  }) as WorkerChild & {
     readonly stdin: NodeStream.Writable;
     readonly stdout: NodeStream.Readable;
     readonly stderr: NodeStream.Readable;
   };
-};
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {

@@ -73,7 +73,7 @@ export function ThreadCommandOutput(props: {
         }}
       >
         {data?.output.truncated ? (
-          <Text className="pb-0.5 text-3xs text-foreground-muted">
+          <Text className="pb-0.5 text-3xs text-foreground-subtle">
             <T>Earlier output not shown</T>
           </Text>
         ) : null}

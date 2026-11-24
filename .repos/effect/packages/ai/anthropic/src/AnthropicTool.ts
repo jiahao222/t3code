@@ -362,7 +362,7 @@ const CodeExecution_20250522_Parameters = Schema.Union([
 // -----------------------------------------------------------------------------
 
 /**
- * Schema for the code-only input variant of the 2025-08-25 code execution tool.
+ * Schema for the 2025-08-25 code execution tool input, containing the code to execute.
  *
  * **When to use**
  *
@@ -382,7 +382,7 @@ export const CodeExecution_20250825_Parameters = Schema.Struct({
   code: Schema.String
 })
 /**
- * Code-only input payload for the 2025-08-25 Anthropic code execution tool.
+ * Input payload for the 2025-08-25 Anthropic code execution tool.
  *
  * **When to use**
  *
@@ -431,10 +431,7 @@ export const CodeExecution_20250522 = Tool.providerDefined({
   customName: "AnthropicCodeExecution",
   providerName: "code_execution",
   parameters: CodeExecution_20250522_Parameters,
-  success: Schema.Union([
-    Generated.BetaResponseCodeExecutionResultBlock,
-    Generated.BetaResponseEncryptedCodeExecutionResultBlock
-  ]),
+  success: Generated.BetaResponseCodeExecutionResultBlock,
   failure: Generated.BetaResponseCodeExecutionToolResultError
 })
 
@@ -448,11 +445,11 @@ export const CodeExecution_20250522 = Tool.providerDefined({
  *
  * **Details**
  *
- * Requires the `code-execution-2025-08-25` beta header. Accepts code-only input,
- * bash commands, and text editor view, create, and replace operations.
+ * Requires the `code-execution-2025-08-25` beta header and uses
+ * `CodeExecution_20250825_Parameters` as its input schema.
  *
  * @see {@link CodeExecution_20250522} for the older 2025-05-22 code execution tool
- * @see {@link CodeExecution_20250825_Parameters} for the code-only input schema
+ * @see {@link CodeExecution_20250825_Parameters} for the input schema consumed by this tool
  *
  * @stability unstable
  * @category tools
@@ -462,16 +459,9 @@ export const CodeExecution_20250825 = Tool.providerDefined({
   id: "anthropic.code_execution_20250825",
   customName: "AnthropicCodeExecution",
   providerName: "code_execution",
-  parameters: Schema.Union([
-    CodeExecution_20250825_Parameters,
-    CodeExecutionBashCommand,
-    CodeExecutionTextEditorView,
-    CodeExecutionTextEditorCreate,
-    CodeExecutionTextEditorStrReplace
-  ]),
+  parameters: CodeExecution_20250825_Parameters,
   success: Schema.Union([
     Generated.BetaResponseCodeExecutionResultBlock,
-    Generated.BetaResponseEncryptedCodeExecutionResultBlock,
     Generated.BetaResponseBashCodeExecutionResultBlock,
     Generated.BetaResponseTextEditorCodeExecutionViewResultBlock,
     Generated.BetaResponseTextEditorCodeExecutionCreateResultBlock,

@@ -191,11 +191,7 @@ export const authenticateMediaRequest =
 
 export const failEnvironmentInternal =
   /* Request instrumentation already owns the span; keep this helper in that context. */
-  Effect.fnUntraced(function* (
-    reason: EnvironmentInternalErrorReason,
-    error?: unknown,
-    detail?: string,
-  ) {
+  Effect.fnUntraced(function* (reason: EnvironmentInternalErrorReason, error?: unknown) {
     const traceId = yield* currentEnvironmentTraceId;
     if (error !== undefined) {
       yield* Effect.logError("environment api operation failed", {
@@ -204,12 +200,7 @@ export const failEnvironmentInternal =
         cause: error,
       });
     }
-    return yield* new EnvironmentInternalError({
-      code: "internal_error",
-      reason,
-      traceId,
-      ...(detail === undefined ? {} : { detail }),
-    });
+    return yield* new EnvironmentInternalError({ code: "internal_error", reason, traceId });
   });
 
 // Plaintext LAN servers still need the cookie; TLS arrives through a proxy that sets X-Forwarded-Proto.

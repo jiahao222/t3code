@@ -36,7 +36,7 @@ import * as Response from "./Response.ts"
 import * as ResponseIdTracker from "./ResponseIdTracker.ts"
 import type { SpanTransformer } from "./Telemetry.ts"
 import { CurrentSpanTransformer } from "./Telemetry.ts"
-import * as Tool from "./Tool.ts"
+import type * as Tool from "./Tool.ts"
 import * as Toolkit from "./Toolkit.ts"
 
 /**
@@ -161,24 +161,14 @@ export interface LanguageModel {
     ObjectEncoded extends Record<string, any>,
     StructuredOutputSchema extends Schema.Encoder<ObjectEncoded, unknown>,
     Options extends NoExcessProperties<
-      GenerateObjectOptions<any, StructuredOutputSchema, boolean>,
+      GenerateObjectOptions<any, StructuredOutputSchema>,
       Options
     >,
     Tools extends Record<string, Tool.Any> = {}
   >(
-    options:
-      & Options
-      & GenerateObjectOptions<
-        Tools,
-        StructuredOutputSchema,
-        false | Extract<Options["allowEmpty" & keyof Options], boolean>
-      >
+    options: Options & GenerateObjectOptions<Tools, StructuredOutputSchema>
   ) => Effect.Effect<
-    GenerateObjectResponse<
-      Tools,
-      ExtractObjectValue<Options, StructuredOutputSchema["Type"]>,
-      ExtractToolParametersMode<Options>
-    >,
+    GenerateObjectResponse<Tools, StructuredOutputSchema["Type"], ExtractToolParametersMode<Options>>,
     ExtractError<Options>,
     ExtractServices<Options> | StructuredOutputSchema["DecodingServices"]
   >
@@ -353,22 +343,13 @@ type GenerateTextOptionsWithoutToolkit = Omit<GenerateTextOptions<{}>, "toolkit"
  */
 export interface GenerateObjectOptions<
   Tools extends Record<string, Tool.Any>,
-  StructuredOutputSchema extends Schema.Top,
-  AllowEmpty extends boolean = false
+  StructuredOutputSchema extends Schema.Top
 > extends GenerateTextOptions<Tools> {
   /**
    * The name of the structured output that should be generated. Used by some
    * large language model providers to provide additional guidance to the model.
    */
   readonly objectName?: string | undefined
-
-  /**
-   * Whether to return `None` for empty or whitespace-only text and `Some` for
-   * valid output. Defaults to `false`; invalid nonempty output still fails.
-   * Use literal `true` for an `Option<A>` value; a widened boolean yields
-   * `A | Option<A>`.
-   */
-  readonly allowEmpty?: AllowEmpty | undefined
 
   /**
    * The schema to be used to specify the structure of the object to generate.
@@ -542,7 +523,7 @@ export class GenerateObjectResponse<
   ParametersMode extends Response.ToolParametersMode = "decoded"
 > extends GenerateTextResponse<Tools, ParametersMode> {
   /**
-   * The decoded schema value, wrapped in an `Option` when `allowEmpty` is enabled.
+   * The parsed structured object that conforms to the provided schema.
    */
   readonly value: A
 
@@ -622,18 +603,6 @@ export type ExtractTools<Options> = Options extends {
   readonly toolkit: infer ToolkitValue
 } ? ExtractToolsFromToolkitOption<Exclude<ToolkitValue, undefined>>
   : {}
-
-/**
- * Resolves to `Option<A>` when `allowEmpty` is true, `A` when false or absent,
- * or their union when the flag may be enabled.
- *
- * @stability unstable
- * @category utility types
- * @since 4.1.4
- */
-export type ExtractObjectValue<Options, A> = Options extends { readonly allowEmpty: true } ? Option.Option<A>
-  : true extends Options["allowEmpty" & keyof Options] ? A | Option.Option<A>
-  : A
 
 /**
  * Resolves to `"deferred"` when tool call resolution may be disabled with
@@ -984,24 +953,14 @@ export const make: (params: {
     ObjectEncoded extends Record<string, any>,
     StructuredOutputSchema extends Schema.Encoder<ObjectEncoded, unknown>,
     Options extends NoExcessProperties<
-      GenerateObjectOptions<any, StructuredOutputSchema, boolean>,
+      GenerateObjectOptions<any, StructuredOutputSchema>,
       Options
     >,
     Tools extends Record<string, Tool.Any> = {}
   >(
-    options:
-      & Options
-      & GenerateObjectOptions<
-        Tools,
-        StructuredOutputSchema,
-        false | Extract<Options["allowEmpty" & keyof Options], boolean>
-      >
+    options: Options & GenerateObjectOptions<Tools, StructuredOutputSchema>
   ): Effect.Effect<
-    GenerateObjectResponse<
-      Tools,
-      ExtractObjectValue<Options, StructuredOutputSchema["Type"]>,
-      ExtractToolParametersMode<Options>
-    >,
+    GenerateObjectResponse<Tools, StructuredOutputSchema["Type"], ExtractToolParametersMode<Options>>,
     ExtractError<Options>,
     ExtractServices<Options> | StructuredOutputSchema["DecodingServices"]
   > => {
@@ -1050,7 +1009,7 @@ export const make: (params: {
               })
           })
 
-          const value = yield* resolveStructuredOutput(content as any, codec, options.allowEmpty ?? false)
+          const value = yield* resolveStructuredOutput(content as any, codec)
 
           return new GenerateObjectResponse(value, content)
         },
@@ -1351,7 +1310,7 @@ export const make: (params: {
         .filter((part): part is Response.ToolCallPartEncoded =>
           part.type === "tool-call" &&
           part.providerExecuted !== true &&
-          resolvableTool(toolkit, part.name) !== undefined
+          toolkit.tools[part.name] !== undefined
         )
         .map((part) => makeInterruptedToolResult(part, incompleteFinishReason) as ToolResolutionResult<Tools>)
       : yield* resolveToolCalls(
@@ -1652,8 +1611,7 @@ export const make: (params: {
               }) :
               identity
           )
-        ),
-        Stream.prepend(preResolvedStreamParts)
+        )
       ) as Stream.Stream<
         Response.StreamPart<Tools>,
         AiError.AiError | Schema.SchemaError,
@@ -1693,7 +1651,7 @@ export const make: (params: {
 
     // Helper function to handle tool calls with approval logic
     const handleToolCall = Effect.fnUntraced(function*(part: Response.ToolCallPartEncoded) {
-      const tool = resolvableTool(toolkit, part.name)
+      const tool = toolkit.tools[part.name]
       if (!tool) return
 
       const needsApproval = yield* isApprovalNeeded(
@@ -1789,7 +1747,7 @@ export const make: (params: {
           // the stream - use the raw chunk for encoded params
           for (const part of chunk) {
             if (part.type === "tool-call" && part.providerExecuted !== true) {
-              if (resolvableTool(toolkit, part.name) !== undefined) {
+              if (toolkit.tools[part.name] !== undefined) {
                 pendingToolCalls.set(part.id, part.name)
               }
               bufferedToolCalls.push(part)
@@ -1990,21 +1948,15 @@ export const generateObject = <
   ObjectEncoded extends Record<string, any>,
   StructuredOutputSchema extends Schema.Encoder<ObjectEncoded, unknown>,
   Options extends NoExcessProperties<
-    GenerateObjectOptions<any, StructuredOutputSchema, boolean>,
+    GenerateObjectOptions<any, StructuredOutputSchema>,
     Options
   >
 >(
-  options:
-    & Options
-    & GenerateObjectOptions<
-      ExtractTools<Options>,
-      StructuredOutputSchema,
-      false | Extract<Options["allowEmpty" & keyof Options], boolean>
-    >
+  options: Options & GenerateObjectOptions<ExtractTools<Options>, StructuredOutputSchema>
 ): Effect.Effect<
   GenerateObjectResponse<
     ExtractTools<Options>,
-    ExtractObjectValue<Options, StructuredOutputSchema["Type"]>,
+    StructuredOutputSchema["Type"],
     ExtractToolParametersMode<Options>
   >,
   ExtractError<Options>,
@@ -2252,7 +2204,7 @@ const isApprovalNeeded = Effect.fnUntraced(function*<T extends Tool.Any>(
   }
 
   if (typeof tool.needsApproval === "function") {
-    const params = yield* Schema.decodeUnknownEffect(Schema.toCodecJson(tool.parametersSchema))(
+    const params = yield* Schema.decodeUnknownEffect(tool.parametersSchema)(
       toolCall.params
     ) as any
 
@@ -2410,16 +2362,6 @@ type ToolResolutionResult<Tools extends Record<string, Tool.Any>> =
   >
   | Response.ToolApprovalRequestPart
 
-// Returns the tool whose handler resolves calls to `name`. Calls to unknown
-// and client-executed tools are left for the caller to answer.
-const resolvableTool = (
-  toolkit: { readonly tools: Record<string, Tool.Any> },
-  name: string
-): Tool.Any | undefined => {
-  const tool = toolkit.tools[name]
-  return tool === undefined || Tool.isClientExecuted(tool) ? undefined : tool
-}
-
 const resolveToolCalls = <Tools extends Record<string, Tool.Any>>(
   content: ReadonlyArray<Response.AllPartsEncoded>,
   toolkit: Toolkit.WithHandler<Tools>,
@@ -2451,7 +2393,7 @@ const resolveToolCalls = <Tools extends Record<string, Tool.Any>>(
 
   const streams = toolCalls.map((toolCall) =>
     Effect.gen(function*() {
-      const tool = resolvableTool(toolkit, toolCall.name)
+      const tool = toolkit.tools[toolCall.name]
       if (!tool) {
         return Stream.empty
       }
@@ -2528,18 +2470,14 @@ const resolveToolCalls = <Tools extends Record<string, Tool.Any>>(
 // Utilities
 // =============================================================================
 
-// Provider-executed tools keep the provider's payload; locally handled tool
-// calls carry the JSON encoding of their parameters.
-const hasProviderParameters = (tool: Tool.Any): boolean => Tool.isProviderDefined(tool) && !tool.requiresHandler
-
 // Cache one decoder per model and response kind, keyed by validation mode
-// and tool names, parameter encodings and schema identities in insertion order.
+// and tool names and schema identities in insertion order.
 const makeResponseDecoder = <Decode>(make: (toolkit: Toolkit.Any, deferred: boolean) => Decode) => {
   let cached: { readonly key: ReadonlyArray<unknown>; readonly decode: Decode } | undefined
   return (toolkit: Toolkit.WithHandler<any>, encoded: boolean, deferred: boolean): Decode => {
     const key: Array<unknown> = [encoded, deferred]
     for (const tool of Object.values(toolkit.tools as Record<string, Tool.Any>)) {
-      key.push(tool.name, hasProviderParameters(tool), tool.parametersSchema, tool.successSchema, tool.failureSchema)
+      key.push(tool.name, tool.parametersSchema, tool.successSchema, tool.failureSchema)
     }
     if (cached !== undefined && cached.key.length === key.length && cached.key.every((part, i) => part === key[i])) {
       return cached.decode
@@ -2563,11 +2501,7 @@ const withParameterMode = (tool: Tool.Any, mode: "encoded" | "opaque"): Tool.Any
     parameterModeTools.set(tool, tools)
   }
   return tools[mode] ??= tool.setParameters(
-    mode === "opaque"
-      ? Schema.Unknown
-      : hasProviderParameters(tool)
-      ? Schema.toEncoded(tool.parametersSchema)
-      : Schema.toEncoded(Schema.toCodecJson(tool.parametersSchema))
+    mode === "encoded" ? Schema.toEncoded(tool.parametersSchema) : Schema.Unknown
   )
 }
 
@@ -2657,11 +2591,7 @@ export const getObjectName = <StructuredOutputSchema extends Schema.Constraint>(
 
 const resolveStructuredOutput = Effect.fnUntraced(function*<
   StructuredOutputSchema extends Schema.Constraint
->(
-  response: ReadonlyArray<Response.AllParts<any>>,
-  schema: StructuredOutputSchema,
-  allowEmpty: boolean
-) {
+>(response: ReadonlyArray<Response.AllParts<any>>, schema: StructuredOutputSchema) {
   const texts: Array<string> = []
   for (const part of response) {
     if (part.type === "text") {
@@ -2670,10 +2600,6 @@ const resolveStructuredOutput = Effect.fnUntraced(function*<
   }
 
   const text = texts.join("")
-
-  if (allowEmpty && text.trim().length === 0) {
-    return Option.none()
-  }
 
   if (text.length === 0) {
     return yield* AiError.make({
@@ -2687,13 +2613,12 @@ const resolveStructuredOutput = Effect.fnUntraced(function*<
   }
 
   const decode = Schema.decodeEffect(Schema.fromJsonString(schema))
-  const value = yield* Effect.mapError(decode(text), (error) =>
+  return yield* Effect.mapError(decode(text), (error) =>
     AiError.make({
       module: "LanguageModel",
       method: "generateObject",
       reason: AiError.StructuredOutputError.fromSchemaError(error, text)
     }))
-  return allowEmpty ? Option.some(value) : value
 })
 
 const applySpanTransformer = (

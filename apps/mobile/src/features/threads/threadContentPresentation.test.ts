@@ -1,9 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import {
-  projectThreadContentPresentation,
-  threadSyncStatusLabel,
-} from "./threadContentPresentation";
+import { projectThreadContentPresentation } from "./threadContentPresentation";
 
 describe("thread content presentation", () => {
   it("renders cached detail while its environment reconnects", () => {
@@ -30,10 +27,5 @@ describe("thread content presentation", () => {
       title: "Messages not cached",
       detail: "Reconnect this environment to load the conversation.",
     });
-  });
-
-  it("shows a sync failure over cached messages instead of syncing forever", () => {
-    expect(threadSyncStatusLabel("cached", "ready", true)).toBe("Could not sync messages");
-    expect(threadSyncStatusLabel("cached", "ready", false)).toBe("Syncing messages…");
   });
 });

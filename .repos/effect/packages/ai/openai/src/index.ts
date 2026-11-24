@@ -70,9 +70,3 @@ export * as OpenAiTelemetry from "./OpenAiTelemetry.ts"
  * @since 4.0.0
  */
 export * as OpenAiTool from "./OpenAiTool.ts"
-
-/**
- * @stability unstable
- * @since 4.1.3
- */
-export * as OpenAiWorkloadIdentity from "./OpenAiWorkloadIdentity.ts"

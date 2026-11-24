@@ -5,8 +5,7 @@ import { File } from "expo-file-system";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useSyncExternalStore } from "react";
 import { Platform } from "react-native";
-import { Effect } from "effect";
-import { Atom, AtomRegistry, AsyncResult } from "effect/reactivity";
+import { Atom, AsyncResult } from "effect/reactivity";
 import { makeMutable } from "react-native-reanimated";
 
 import {
@@ -77,7 +76,7 @@ const voiceInputAvailableAtom = Atom.make((get) => {
  * The app has one microphone and one dictation at a time, so the session
  * lives for the registry's lifetime rather than any screen's.
  */
-export const voiceInputAtom = Atom.make((get) => {
+const voiceInputAtom = Atom.make((get) => {
   const registry = get.registry;
   // Mounted so the recorder can read known microphones synchronously.
   get.mount(mobilePreferencesAtom);
@@ -86,7 +85,6 @@ export const voiceInputAtom = Atom.make((get) => {
   );
   let keepAwakeSequence = 0;
   let audioToken: ReturnType<typeof acquireAudioSession> | null = null;
-  let recordingMicrophoneOrder: ReadonlyArray<MicrophoneEntry> | null = null;
   const permission = createVoiceRecordingPermission(() => {
     void session.controller.appMovedToBackground();
   });
@@ -104,9 +102,11 @@ export const voiceInputAtom = Atom.make((get) => {
         url: status.url,
       });
     },
+    // Read when recording starts so preference changes do not re-render every composer.
     selectInput: (inputs) => {
-      const known = recordingMicrophoneOrder;
-      if (!known) return null;
+      const preferences = registry.get(mobilePreferencesAtom);
+      if (!AsyncResult.isSuccess(preferences)) return null;
+      const known = deviceMicrophoneOrder(preferences.value.microphones);
       const order = rememberMicrophones(known, inputs);
       if (order !== known) {
         void runAtomCommand(registry, saveMobilePreferences, {
@@ -131,20 +131,7 @@ export const voiceInputAtom = Atom.make((get) => {
       const token = acquireAudioSession("recording");
       audioToken = token;
       try {
-        const current = registry.get(mobilePreferencesAtom);
-        const preferences = AsyncResult.isSuccess(current)
-          ? current.value
-          : await Effect.runPromise(
-              AtomRegistry.getResult(registry, mobilePreferencesAtom).pipe(
-                Effect.orElseSucceed(() => null),
-              ),
-            );
-        recordingMicrophoneOrder = preferences
-          ? deviceMicrophoneOrder(preferences.microphones)
-          : null;
-        const builtInMicFirst =
-          Platform.OS === "ios" && recordingMicrophoneOrder?.[0]?.kind === "builtIn";
-        await activateAudioSession(token, { allowBluetoothRecording: !builtInMicFirst });
+        await activateAudioSession(token);
       } catch (error) {
         await releaseAudioSession(token).catch(() => {});
         throw error;

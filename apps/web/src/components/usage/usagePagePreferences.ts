@@ -11,7 +11,7 @@ const UsagePagePreferencesSchema = Schema.Struct({
 });
 export type UsagePagePreferences = typeof UsagePagePreferencesSchema.Type;
 
-const DEFAULT_PREFERENCES: UsagePagePreferences = { metric: "limits", windowDays: 30 };
+const DEFAULT_PREFERENCES: UsagePagePreferences = { metric: "tokens", windowDays: 30 };
 
 export function readUsagePagePreferences(): UsagePagePreferences {
   try {
