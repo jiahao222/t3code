@@ -7693,6 +7693,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             );
         });
 
+        const isStartupRequestTimeout = (error: unknown): boolean =>
+          Schema.is(EffectAcpErrors.AcpTransportError)(error) &&
+          typeof error.detail === "string" &&
+          /^ACP (initialize|authenticate) timed out after /.test(error.detail);
+
         const startAcpRuntime = Effect.fnUntraced(function* (
           threadId: ThreadId | null,
           resumeSessionId?: string,
@@ -7704,6 +7709,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             return yield* runtime.start();
           });
           return yield* (flavor.withRuntimeStartup?.(startup) ?? startup).pipe(
+            Effect.retry({ times: 1, while: isStartupRequestTimeout }),
             Effect.onError(() => Ref.set(loadingSessionId, null)),
           );
         });

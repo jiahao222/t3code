@@ -2287,6 +2287,26 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       ),
     );
 
+  const STARTUP_REQUEST_TIMEOUT = "20 seconds" as const;
+  const withStartupRequestTimeout = <A>(
+    method: "initialize" | "authenticate",
+    effect: Effect.Effect<A, EffectAcpErrors.AcpError>,
+  ): Effect.Effect<A, EffectAcpErrors.AcpError> =>
+    effect.pipe(
+      Effect.timeoutOrElse({
+        duration: STARTUP_REQUEST_TIMEOUT,
+        orElse: () =>
+          Effect.fail(
+            new EffectAcpErrors.AcpTransportError({
+              operation: "call-rpc",
+              method,
+              detail: `ACP ${method} timed out after ${STARTUP_REQUEST_TIMEOUT}`,
+              cause: `ACP ${method} timed out after ${STARTUP_REQUEST_TIMEOUT}`,
+            }),
+          ),
+      }),
+    );
+
   const initializeOnce = Effect.gen(function* () {
     const initializePayload = {
       protocolVersion: 2,
@@ -2298,7 +2318,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     const initializeResult = yield* runLoggedRequest(
       "initialize",
       initializePayload,
-      acp.agent.initialize(initializePayload),
+      withStartupRequestTimeout("initialize", acp.agent.initialize(initializePayload)),
     );
     yield* options.onInitialized?.(initializeResult) ?? Effect.void;
     return initializeResult;
@@ -2407,7 +2427,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         yield* runLoggedRequest(
           "authenticate",
           authenticatePayload,
-          acp.agent.authenticate(authenticatePayload),
+          withStartupRequestTimeout("authenticate", acp.agent.authenticate(authenticatePayload)),
         );
       },
     );
@@ -2477,7 +2497,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       yield* runLoggedRequest(
         "authenticate",
         authenticatePayload,
-        acp.agent.authenticate(authenticatePayload),
+        withStartupRequestTimeout("authenticate", acp.agent.authenticate(authenticatePayload)),
       );
     }
     const { sessionId, sessionSetupResult } = yield* setupSession.pipe(
