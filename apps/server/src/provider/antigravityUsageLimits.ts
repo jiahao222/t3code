@@ -8,12 +8,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import {
   makeUnavailableUsageLimits,
   makeUsageLimits,
 } from "@t3tools/provider-core/server/usageLimits";
+import { createProxyFetchDispatcher } from "../outboundHttp.ts";
 
 export function antigravityUserAgent(platform: NodeJS.Platform, architecture: NodeJS.Architecture) {
   return `antigravity/hub/2.24.0 (aidev_client; os_type=${platform}; arch=${architecture}; cl=963137146)`;
@@ -210,6 +212,7 @@ function modelWindows(models: typeof Models.Type) {
 export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(function* (input: {
   readonly profileDirectory: string;
   readonly authMethod: AntigravitySettings["authMethod"];
+  readonly environment?: NodeJS.ProcessEnv;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -218,6 +221,20 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   const platform = yield* HostProcess.Platform;
   const architecture = yield* HostProcess.Architecture;
   const tokenPath = path.join(input.profileDirectory, "antigravity-acp", "acp_token.json");
+  const proxyDispatcher = createProxyFetchDispatcher(input.environment);
+  if (proxyDispatcher !== undefined) {
+    const scope = yield* Effect.serviceOption(Scope.Scope);
+    if (Option.isSome(scope)) {
+      yield* Scope.addFinalizer(
+        scope.value,
+        Effect.promise(() => proxyDispatcher.close()).pipe(Effect.ignore),
+      );
+    }
+  }
+  const requestInit: RequestInit =
+    proxyDispatcher === undefined
+      ? MANUAL_REDIRECT
+      : ({ ...MANUAL_REDIRECT, dispatcher: proxyDispatcher.dispatcher } as RequestInit);
   let cached:
     | { fingerprint: string; account: string; accessToken: string; expiresAt: number }
     | undefined;
@@ -225,7 +242,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
 
   const request = (request: HttpClientRequest.HttpClientRequest) =>
     client.execute(request).pipe(
-      Effect.provideService(FetchHttpClient.RequestInit, MANUAL_REDIRECT),
+      Effect.provideService(FetchHttpClient.RequestInit, requestInit),
       Effect.flatMap(HttpClientResponse.filterStatusOk),
       Effect.flatMap((response) => response.json),
       Effect.timeout("10 seconds"),

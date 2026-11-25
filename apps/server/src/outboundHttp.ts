@@ -29,6 +29,48 @@ export function installHttp1FetchDispatcher(): void {
   );
 }
 
+export interface ProxyFetchDispatcher {
+  readonly dispatcher: Undici.Dispatcher;
+  readonly close: () => Promise<void>;
+}
+
+export function resolveProxyEnvironment(environment: NodeJS.ProcessEnv | undefined):
+  | {
+      readonly httpProxy?: string;
+      readonly httpsProxy?: string;
+      readonly noProxy?: string;
+    }
+  | undefined {
+  if (!environment) return undefined;
+  const httpProxy = (environment["HTTP_PROXY"] ?? environment["http_proxy"])?.trim() || undefined;
+  const httpsProxy =
+    (environment["HTTPS_PROXY"] ?? environment["https_proxy"])?.trim() || undefined;
+  const noProxy = (environment["NO_PROXY"] ?? environment["no_proxy"])?.trim() || undefined;
+  if (!httpProxy && !httpsProxy) return undefined;
+  return {
+    ...(httpProxy ? { httpProxy } : {}),
+    ...(httpsProxy ? { httpsProxy } : {}),
+    ...(noProxy ? { noProxy } : {}),
+  };
+}
+
+export function createProxyFetchDispatcher(
+  environment: NodeJS.ProcessEnv | undefined,
+): ProxyFetchDispatcher | undefined {
+  const proxy = resolveProxyEnvironment(environment);
+  if (!proxy) return undefined;
+  const undici = requireUndici("undici") as typeof Undici;
+  const agent = new undici.EnvHttpProxyAgent({
+    ...proxy,
+    allowH2: false,
+    clientFactory: (origin) => new undici.Pool(origin, { allowH2: false }),
+  });
+  return {
+    dispatcher: agent,
+    close: () => agent.close(),
+  };
+}
+
 /** Avoids uncaught idle-timeout errors on h2 streams (https://github.com/nodejs/undici/issues/5936). */
 export function keepOutboundFetchOnHttp1(): void {
   if (builtinFetchUsesHttp2(process.versions.undici)) installHttp1FetchDispatcher();

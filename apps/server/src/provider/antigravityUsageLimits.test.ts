@@ -66,6 +66,7 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     userInfoAt?: number;
     missingToken?: boolean;
     authMethod?: "oauth-personal" | "oauth-business" | "gemini-api-key";
+    environment?: NodeJS.ProcessEnv;
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -85,10 +86,12 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     );
   if (!options.missingToken) yield* writeToken(options.refreshToken ?? "refresh-a");
   const requests: Array<{ url: string; body: string }> = [];
+  const requestInits: Array<RequestInit | undefined> = [];
   const http = HttpClient.make((request, url, _signal, fiber) =>
     Effect.sync(() => {
       const init = Context.getOrUndefined(fiber.context, FetchHttpClient.RequestInit);
       expect(init?.redirect).toBe("manual");
+      requestInits.push(init);
       const body =
         request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
       requests.push({ url: request.url, body });
@@ -132,8 +135,9 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
   const usage = yield* makeAntigravityUsageProbe({
     profileDirectory,
     authMethod: options.authMethod ?? "oauth-personal",
+    ...(options.environment === undefined ? {} : { environment: options.environment }),
   }).pipe(Effect.provideService(HttpClient.HttpClient, http));
-  return { ...usage, requests, writeToken, tokenPath };
+  return { ...usage, requests, requestInits, writeToken, tokenPath };
 });
 
 describe("Antigravity subscription limits", () => {
@@ -660,6 +664,32 @@ describe("Antigravity subscription limits", () => {
         const { probe, requests } = yield* fixture(options);
         expect((yield* probe).unavailable?.reason).toBe("unsupported");
         expect(requests).toEqual([]);
+      }
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
+  it.effect("attaches an EnvHttpProxyAgent dispatcher when profile proxy env is configured", () =>
+    Effect.gen(function* () {
+      const withProxy = yield* fixture({
+        environment: {
+          HTTP_PROXY: "http://127.0.0.1:7897",
+          HTTPS_PROXY: "http://127.0.0.1:7897",
+          NO_PROXY: "127.0.0.1,localhost",
+        },
+      });
+      yield* withProxy.probe;
+      expect(withProxy.requestInits.length).toBeGreaterThan(0);
+      for (const init of withProxy.requestInits) {
+        const dispatcher = (init as { dispatcher?: { constructor?: { name?: string } } })
+          ?.dispatcher;
+        expect(dispatcher?.constructor?.name).toBe("EnvHttpProxyAgent");
+      }
+
+      const withoutProxy = yield* fixture({ environment: {} });
+      yield* withoutProxy.probe;
+      expect(withoutProxy.requestInits.length).toBeGreaterThan(0);
+      for (const init of withoutProxy.requestInits) {
+        expect((init as { dispatcher?: unknown })?.dispatcher).toBeUndefined();
       }
     }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
