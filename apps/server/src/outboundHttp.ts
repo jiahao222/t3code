@@ -1,7 +1,7 @@
 import * as NodeModule from "node:module";
 import * as NodeNet from "node:net";
 
-import { installLocalEgressGuard } from "@t3tools/shared/localEgressGuard";
+import { guardLocalEgressFetch, installLocalEgressGuard } from "@t3tools/shared/localEgressGuard";
 import type * as Undici from "undici";
 
 installLocalEgressGuard("server");
@@ -31,6 +31,7 @@ export function installHttp1FetchDispatcher(): void {
 
 export interface ProxyFetchDispatcher {
   readonly dispatcher: Undici.Dispatcher;
+  readonly fetch: typeof globalThis.fetch;
   readonly close: () => Promise<void>;
 }
 
@@ -67,6 +68,8 @@ export function createProxyFetchDispatcher(
   });
   return {
     dispatcher: agent,
+    // Electron's bundled fetch may use a different major dispatcher protocol.
+    fetch: guardLocalEgressFetch(undici.fetch as unknown as typeof globalThis.fetch),
     close: () => agent.close(),
   };
 }

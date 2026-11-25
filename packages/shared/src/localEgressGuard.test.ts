@@ -119,9 +119,9 @@ describe("localEgressGuard policy & runtime enforcement", () => {
         "server",
       ).allowed,
     ).toBe(false);
-    expect(
-      checkOutboundUrlPolicy("https://registry.npmjs.org/t3/latest", "server").allowed,
-    ).toBe(false);
+    expect(checkOutboundUrlPolicy("https://registry.npmjs.org/t3/latest", "server").allowed).toBe(
+      false,
+    );
     expect(
       checkOutboundUrlPolicy("https://registry.npmjs.org/@t3tools/desktop", "server").allowed,
     ).toBe(false);
@@ -210,9 +210,51 @@ describe("localEgressGuard policy & runtime enforcement", () => {
     );
 
     // Blocked external WebSocket
-    expect(() => new WebSocket("wss://relay.t3.codes/ws")).toThrow(
-      /blocked by local-only policy/i,
+    expect(() => new WebSocket("wss://relay.t3.codes/ws")).toThrow(/blocked by local-only policy/i);
+  });
+
+  it("preserves an explicit proxy dispatcher across allowed redirects without allowing blocked targets", () => {
+    const output = NodeChildProcess.execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+        import { installLocalEgressGuard } from ${JSON.stringify(new URL("./localEgressGuard.ts", import.meta.url).href)};
+        const dispatcher = {};
+        const requests = [];
+        globalThis.fetch = async (url, init) => {
+          requests.push({ url: String(url), proxied: init.dispatcher === dispatcher });
+          if (String(url).endsWith("/blocked")) {
+            return new Response(null, { status: 302, headers: { location: "https://example.com/" } });
+          }
+          if (String(url).endsWith("/token")) {
+            return new Response(null, { status: 302, headers: { location: "https://www.googleapis.com/oauth2/v2/userinfo" } });
+          }
+          return new Response("ok");
+        };
+        installLocalEgressGuard("server");
+        const response = await fetch("https://oauth2.googleapis.com/token", { dispatcher });
+        let blocked = false;
+        try {
+          await fetch("https://oauth2.googleapis.com/blocked", { dispatcher });
+        } catch (error) {
+          blocked = error.name === "LocalEgressBlockedError";
+        }
+        console.log(JSON.stringify({ body: await response.text(), blocked, requests }));
+      `,
+      ],
+      { encoding: "utf8" },
     );
+    expect(JSON.parse(output)).toEqual({
+      body: "ok",
+      blocked: true,
+      requests: [
+        { url: "https://oauth2.googleapis.com/token", proxied: true },
+        { url: "https://www.googleapis.com/oauth2/v2/userinfo", proxied: true },
+        { url: "https://oauth2.googleapis.com/blocked", proxied: true },
+      ],
+    });
   });
 
   it("blocks DNS lookup for T3/unlisted domains, UDP send to external IPs, non-loopback server listen, and cloudflared/tailscale subprocesses", async () => {
@@ -264,7 +306,10 @@ describe("localEgressGuard policy & runtime enforcement", () => {
     ).toThrow(/blocked by local-only policy/i);
 
     // Normal subprocesses (like ACP agents) remain allowed
-    const out = NodeChildProcess.execFileSync(process.execPath, ["-e", "process.stdout.write('acp-ok')"]);
+    const out = NodeChildProcess.execFileSync(process.execPath, [
+      "-e",
+      "process.stdout.write('acp-ok')",
+    ]);
     expect(out.toString()).toBe("acp-ok");
   });
 });

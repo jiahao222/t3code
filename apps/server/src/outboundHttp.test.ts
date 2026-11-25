@@ -110,6 +110,42 @@ const runNode = Effect.fnUntraced(function* (args: Array<string>) {
   );
 }, Effect.scoped);
 
+describe("createProxyFetchDispatcher", () => {
+  it.effect("uses its matching fetch transport and still rejects unlisted destinations", () =>
+    Effect.gen(function* () {
+      const child = yield* runNode([
+        "--input-type=module",
+        "--eval",
+        `
+import * as NodeTls from "node:tls";
+import { createProxyFetchDispatcher } from ${JSON.stringify(new URL("./outboundHttp.ts", import.meta.url).href)};
+NodeTls.setDefaultCACertificates([${JSON.stringify(TEST_CERT)}]);
+globalThis.fetch = () => { throw new Error("incompatible native fetch"); };
+const proxy = createProxyFetchDispatcher({
+  HTTPS_PROXY: "http://127.0.0.1:1",
+  NO_PROXY: "127.0.0.1",
+});
+try {
+  const response = await proxy.fetch(${JSON.stringify(origin)}, { dispatcher: proxy.dispatcher });
+  console.log(await response.text());
+  try {
+    await proxy.fetch("https://example.com/", { dispatcher: proxy.dispatcher });
+    throw new Error("unlisted destination was allowed");
+  } catch (error) {
+    if (error.name !== "LocalEgressBlockedError") throw error;
+    console.log("blocked");
+  }
+} finally {
+  await proxy.close();
+}
+`,
+      ]);
+      expect(child.exitCode, child.stderr).toBe(0);
+      expect(child.stdout.trim()).toBe("1.1\nblocked");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
 describe("ignoreMacosTypeOfServiceEinval", () => {
   const errnoError = (code: string) =>
     Object.assign(new Error(`setTypeOfService ${code}`), { code, syscall: "setTypeOfService" });

@@ -94,12 +94,13 @@ const ALLOWED_SERVER_EXACT_HOSTS = new Set([
   "registry.npmjs.org",
 ]);
 
-const ALLOWED_DESKTOP_EXACT_HOSTS = new Set([
-  "cdn.agentclientprotocol.com",
-]);
+const ALLOWED_DESKTOP_EXACT_HOSTS = new Set(["cdn.agentclientprotocol.com"]);
 
 function stripBracketsAndZone(rawHost: string): string {
-  const trimmed = rawHost.trim().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  const trimmed = rawHost
+    .trim()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.$/, "");
   const zoneIndex = trimmed.indexOf("%");
   return (zoneIndex === -1 ? trimmed : trimmed.slice(0, zoneIndex)).toLowerCase();
 }
@@ -141,7 +142,7 @@ export function isStrictLoopbackIp(rawAddress: string): boolean {
       const hexMatch = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(tail);
       if (hexMatch) {
         const hi = Number.parseInt(hexMatch[1]!, 16);
-        return (hi >> 8) === 127;
+        return hi >> 8 === 127;
       }
     }
   }
@@ -464,7 +465,9 @@ function checkSubprocessCommandAllowed(
   file: string,
   args: ReadonlyArray<string>,
 ): { readonly allowed: true } | { readonly allowed: false; readonly reason: string } {
-  const base = NodePath.basename(file).toLowerCase().replace(/\.exe$/, "");
+  const base = NodePath.basename(file)
+    .toLowerCase()
+    .replace(/\.exe$/, "");
   if (BLOCKED_SUBPROCESS_BINARIES.has(base)) {
     return { allowed: false, reason: `blocked-binary:${base}` };
   }
@@ -478,6 +481,85 @@ function checkSubprocessCommandAllowed(
     return { allowed: false, reason: "blocked-repo:pingdotgg/t3code" };
   }
   return { allowed: true };
+}
+
+export function guardLocalEgressFetch(
+  originalFetch: typeof globalThis.fetch,
+): typeof globalThis.fetch {
+  const state = getGuardState();
+  type FetchInput = Parameters<typeof globalThis.fetch>[0];
+  return async (input: FetchInput, init?: RequestInit): Promise<Response> => {
+    // Node's proxy dispatcher is not retained by new Request(input, init).
+    const dispatcher = (init as (RequestInit & { readonly dispatcher?: unknown }) | undefined)
+      ?.dispatcher;
+    const baseRequest = new Request(input, init);
+    const callerRedirect = init?.redirect ?? baseRequest.redirect ?? "follow";
+    let currentUrl = assertAllowedOutboundUrl(baseRequest.url, state.mode, baseRequest.method);
+    let currentMethod = baseRequest.method;
+    let currentBody: ArrayBuffer | null =
+      currentMethod !== "GET" && currentMethod !== "HEAD" ? await baseRequest.arrayBuffer() : null;
+    const currentHeaders = new Headers(baseRequest.headers);
+
+    for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop += 1) {
+      assertAllowedOutboundUrl(currentUrl, state.mode, currentMethod);
+      const signal = init?.signal ?? baseRequest.signal;
+      const hopResponse = await originalFetch(currentUrl, {
+        ...(dispatcher === undefined ? {} : { dispatcher }),
+        method: currentMethod,
+        headers: currentHeaders,
+        ...(currentBody !== null ? { body: currentBody } : {}),
+        redirect: "manual",
+        ...(signal ? { signal } : {}),
+      });
+
+      const isRedirect =
+        hopResponse.status === 301 ||
+        hopResponse.status === 302 ||
+        hopResponse.status === 303 ||
+        hopResponse.status === 307 ||
+        hopResponse.status === 308;
+
+      if (!isRedirect) {
+        return hopResponse;
+      }
+
+      const location = hopResponse.headers.get("location");
+      if (!location) {
+        return hopResponse;
+      }
+
+      const nextUrl = new URL(location, currentUrl);
+      // Validate redirect target immediately even if callerRedirect === "manual" so blocked redirects cannot leak!
+      assertAllowedOutboundUrl(nextUrl, state.mode, currentMethod);
+
+      if (callerRedirect === "manual") {
+        return hopResponse;
+      }
+      if (callerRedirect === "error") {
+        throw new TypeError(`Redirect not allowed for ${currentUrl.href}`);
+      }
+      if (hop === MAX_REDIRECT_HOPS) {
+        throw new TypeError(`Too many redirects while fetching ${baseRequest.url}`);
+      }
+
+      if (
+        hopResponse.status === 303 ||
+        ((hopResponse.status === 301 || hopResponse.status === 302) && currentMethod === "POST")
+      ) {
+        currentMethod = "GET";
+        currentBody = null;
+        currentHeaders.delete("content-length");
+        currentHeaders.delete("content-type");
+      }
+      if (nextUrl.origin !== currentUrl.origin) {
+        currentHeaders.delete("authorization");
+        currentHeaders.delete("cookie");
+      }
+      currentUrl = nextUrl;
+    }
+
+    throw new TypeError(`Unexpected redirect loop for ${baseRequest.url}`);
+  };
 }
 
 export function installLocalEgressGuard(mode: LocalEgressMode): void {
@@ -676,9 +758,10 @@ export function installLocalEgressGuard(mode: LocalEgressMode): void {
       if (isLoopbackHostname(normalizedHost)) {
         const patchedOpts: NodeNet.TcpSocketConnectOpts = {
           ...opts,
-          host: normalizedHost === "localhost" || normalizedHost.endsWith(".localhost")
-            ? "127.0.0.1"
-            : opts.host ?? "127.0.0.1",
+          host:
+            normalizedHost === "localhost" || normalizedHost.endsWith(".localhost")
+              ? "127.0.0.1"
+              : (opts.host ?? "127.0.0.1"),
           lookup: guardedLookup,
         };
         const nextArgs = [patchedOpts, ...args.slice(1)];
@@ -796,15 +879,13 @@ export function installLocalEgressGuard(mode: LocalEgressMode): void {
       if (typeof first === "object" && first !== null) {
         const opts = first as NodeTls.ConnectionOptions;
         if (!opts.path) {
-          const candidateHost = stripBracketsAndZone(
-            opts.servername || opts.host || "127.0.0.1",
-          );
-          if (!isLoopbackHostname(candidateHost) && !isAllowedOfficialVendorHost(candidateHost, state.mode)) {
+          const candidateHost = stripBracketsAndZone(opts.servername || opts.host || "127.0.0.1");
+          if (
+            !isLoopbackHostname(candidateHost) &&
+            !isAllowedOfficialVendorHost(candidateHost, state.mode)
+          ) {
             const sock = new NodeTls.TLSSocket(new NodeNet.Socket());
-            const err = new LocalEgressBlockedError(
-              candidateHost,
-              "unauthorized-tls-servername",
-            );
+            const err = new LocalEgressBlockedError(candidateHost, "unauthorized-tls-servername");
             queueMicrotask(() => sock.destroy(err));
             return sock;
           }
@@ -817,10 +898,7 @@ export function installLocalEgressGuard(mode: LocalEgressMode): void {
 
   // 4. Patch node:dgram (block non-loopback UDP)
   const originalUdpSend = NodeDgram.Socket.prototype.send;
-  NodeDgram.Socket.prototype.send = function (
-    this: NodeDgram.Socket,
-    ...args: unknown[]
-  ): void {
+  NodeDgram.Socket.prototype.send = function (this: NodeDgram.Socket, ...args: unknown[]): void {
     // Signatures: send(msg, port?, address?, cb?) or send(msg, offset, length, port?, address?, cb?)
     let address: string | undefined;
     let cb: ((err: Error | null) => void) | undefined;
@@ -881,7 +959,10 @@ export function installLocalEgressGuard(mode: LocalEgressMode): void {
       }
 
       if (method.toUpperCase() === "CONNECT") {
-        throw new LocalEgressBlockedError(String(targetUrl ?? "CONNECT"), "http-connect-tunnel-blocked");
+        throw new LocalEgressBlockedError(
+          String(targetUrl ?? "CONNECT"),
+          "http-connect-tunnel-blocked",
+        );
       }
 
       if (socketPath !== undefined) {
@@ -913,87 +994,15 @@ export function installLocalEgressGuard(mode: LocalEgressMode): void {
     const originalHttp2Connect = cjsHttp2.connect.bind(cjsHttp2);
     cjsHttp2.connect = ((authority: string | URL, ...rest: unknown[]) => {
       assertAllowedOutboundUrl(authority, state.mode, "GET");
-      return (originalHttp2Connect as (a: string | URL, ...r: unknown[]) => NodeHttp2.ClientHttp2Session)(
-        authority,
-        ...rest,
-      );
+      return (
+        originalHttp2Connect as (a: string | URL, ...r: unknown[]) => NodeHttp2.ClientHttp2Session
+      )(authority, ...rest);
     }) as typeof NodeHttp2.connect;
   } catch {}
 
   // 6. Patch globalThis.fetch with strict per-hop URL + redirect validation
   if (typeof globalThis.fetch === "function") {
-    type FetchInput = Parameters<typeof globalThis.fetch>[0];
-    const originalFetch = globalThis.fetch.bind(globalThis);
-    globalThis.fetch = async (input: FetchInput, init?: RequestInit): Promise<Response> => {
-      const baseRequest = new Request(input, init);
-      const callerRedirect = init?.redirect ?? baseRequest.redirect ?? "follow";
-      let currentUrl = assertAllowedOutboundUrl(baseRequest.url, state.mode, baseRequest.method);
-      let currentMethod = baseRequest.method;
-      let currentBody: ArrayBuffer | null =
-        currentMethod !== "GET" && currentMethod !== "HEAD"
-          ? await baseRequest.arrayBuffer()
-          : null;
-      const currentHeaders = new Headers(baseRequest.headers);
-
-      for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop += 1) {
-        assertAllowedOutboundUrl(currentUrl, state.mode, currentMethod);
-        const signal = init?.signal ?? baseRequest.signal;
-        const hopResponse = await originalFetch(currentUrl, {
-          method: currentMethod,
-          headers: currentHeaders,
-          ...(currentBody !== null ? { body: currentBody } : {}),
-          redirect: "manual",
-          ...(signal ? { signal } : {}),
-        });
-
-        const isRedirect =
-          hopResponse.status === 301 ||
-          hopResponse.status === 302 ||
-          hopResponse.status === 303 ||
-          hopResponse.status === 307 ||
-          hopResponse.status === 308;
-
-        if (!isRedirect) {
-          return hopResponse;
-        }
-
-        const location = hopResponse.headers.get("location");
-        if (!location) {
-          return hopResponse;
-        }
-
-        const nextUrl = new URL(location, currentUrl);
-        // Validate redirect target immediately even if callerRedirect === "manual" so blocked redirects cannot leak!
-        assertAllowedOutboundUrl(nextUrl, state.mode, currentMethod);
-
-        if (callerRedirect === "manual") {
-          return hopResponse;
-        }
-        if (callerRedirect === "error") {
-          throw new TypeError(`Redirect not allowed for ${currentUrl.href}`);
-        }
-        if (hop === MAX_REDIRECT_HOPS) {
-          throw new TypeError(`Too many redirects while fetching ${baseRequest.url}`);
-        }
-
-        if (
-          hopResponse.status === 303 ||
-          ((hopResponse.status === 301 || hopResponse.status === 302) && currentMethod === "POST")
-        ) {
-          currentMethod = "GET";
-          currentBody = null;
-          currentHeaders.delete("content-length");
-          currentHeaders.delete("content-type");
-        }
-        if (nextUrl.origin !== currentUrl.origin) {
-          currentHeaders.delete("authorization");
-          currentHeaders.delete("cookie");
-        }
-        currentUrl = nextUrl;
-      }
-
-      throw new TypeError(`Unexpected redirect loop for ${baseRequest.url}`);
-    };
+    globalThis.fetch = guardLocalEgressFetch(globalThis.fetch.bind(globalThis));
   }
 
   // 7. Patch globalThis.WebSocket (allow loopback ws/wss only)
@@ -1034,11 +1043,7 @@ export function installLocalEgressGuard(mode: LocalEgressMode): void {
   };
 
   try {
-    cjsChildProcess.spawn = ((
-      command: string,
-      argsOrOpts?: unknown,
-      maybeOpts?: unknown,
-    ) => {
+    cjsChildProcess.spawn = ((command: string, argsOrOpts?: unknown, maybeOpts?: unknown) => {
       const hasArgs = Array.isArray(argsOrOpts);
       const args = hasArgs ? (argsOrOpts as string[]) : [];
       const check = checkSubprocessCommandAllowed(command, args);
@@ -1058,11 +1063,7 @@ export function installLocalEgressGuard(mode: LocalEgressMode): void {
       );
     }) as typeof NodeChildProcess.spawn;
 
-    cjsChildProcess.spawnSync = ((
-      command: string,
-      argsOrOpts?: unknown,
-      maybeOpts?: unknown,
-    ) => {
+    cjsChildProcess.spawnSync = ((command: string, argsOrOpts?: unknown, maybeOpts?: unknown) => {
       const hasArgs = Array.isArray(argsOrOpts);
       const args = hasArgs ? (argsOrOpts as string[]) : [];
       const check = checkSubprocessCommandAllowed(command, args);
@@ -1070,11 +1071,9 @@ export function installLocalEgressGuard(mode: LocalEgressMode): void {
         throw new LocalEgressBlockedError(`${command} ${args.join(" ")}`.trim(), check.reason);
       }
       if (hasArgs) {
-        return (originalSpawnSync as (...a: unknown[]) => NodeChildProcess.SpawnSyncReturns<Buffer>)(
-          command,
-          argsOrOpts,
-          withRestoredChildEnv(maybeOpts),
-        );
+        return (
+          originalSpawnSync as (...a: unknown[]) => NodeChildProcess.SpawnSyncReturns<Buffer>
+        )(command, argsOrOpts, withRestoredChildEnv(maybeOpts));
       }
       return (originalSpawnSync as (...a: unknown[]) => NodeChildProcess.SpawnSyncReturns<Buffer>)(
         command,
@@ -1101,11 +1100,7 @@ export function installLocalEgressGuard(mode: LocalEgressMode): void {
       );
     }) as typeof NodeChildProcess.execFile;
 
-    cjsChildProcess.execFileSync = ((
-      file: string,
-      argsOrOpts?: unknown,
-      maybeOpts?: unknown,
-    ) => {
+    cjsChildProcess.execFileSync = ((file: string, argsOrOpts?: unknown, maybeOpts?: unknown) => {
       const args = Array.isArray(argsOrOpts) ? (argsOrOpts as string[]) : [];
       const check = checkSubprocessCommandAllowed(file, args);
       if (!check.allowed) {

@@ -243,6 +243,10 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   const request = (request: HttpClientRequest.HttpClientRequest) =>
     client.execute(request).pipe(
       Effect.provideService(FetchHttpClient.RequestInit, requestInit),
+      (effect) =>
+        proxyDispatcher === undefined
+          ? effect
+          : Effect.provideService(effect, FetchHttpClient.Fetch, proxyDispatcher.fetch),
       Effect.flatMap(HttpClientResponse.filterStatusOk),
       Effect.flatMap((response) => response.json),
       Effect.timeout("10 seconds"),
