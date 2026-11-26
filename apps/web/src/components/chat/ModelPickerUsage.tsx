@@ -1,4 +1,3 @@
-import { ensureLocalApi } from "../../localApi";
 import type { EnvironmentId, ServerProvider } from "@t3tools/contracts";
 import { formatResetsIn } from "@t3tools/shared/usageLimitsCopy";
 import { useGT, useMessages, T } from "gt-react";
@@ -35,11 +34,6 @@ export function ModelPickerUsage({
     setBusy(true);
     setFailed(false);
     try {
-      if (
-        provider.driver === "antigravity" &&
-        !(await ensureLocalApi().dialogs.confirm(gt("Refresh limits")))
-      )
-        return;
       await refreshProvider({
         environmentId,
         input: {

@@ -20,8 +20,8 @@ vi.mock("gt-react", () => ({
 }));
 import { ModelPickerUsage } from "./ModelPickerUsage";
 
-it("opens AGY usage without querying and refreshes only after confirmation", async () => {
-  state.confirm.mockReset().mockResolvedValue(false);
+it("opens AGY usage without querying and refreshes immediately on one click", async () => {
+  state.confirm.mockReset();
   state.refresh.mockReset().mockResolvedValue(undefined);
   const provider: ServerProvider = {
     instanceId: ProviderInstanceId.make("agy-test"),
@@ -44,14 +44,11 @@ it("opens AGY usage without querying and refreshes only after confirmation", asy
   expect(state.confirm).not.toHaveBeenCalled();
   expect(state.refresh).not.toHaveBeenCalled();
   await screen.getByRole("button", { name: "Refresh", exact: true }).click();
-  expect(state.confirm).toHaveBeenCalledTimes(1);
-  expect(state.refresh).not.toHaveBeenCalled();
-  state.confirm.mockResolvedValue(true);
-  await screen.getByRole("button", { name: "Refresh", exact: true }).click();
   await vi.waitFor(() =>
     expect(state.refresh).toHaveBeenCalledExactlyOnceWith({
       environmentId: "local",
       input: { instanceId: "agy-test", fresh: true, antigravityUsageConfirmed: true },
     }),
   );
+  expect(state.confirm).not.toHaveBeenCalled();
 });

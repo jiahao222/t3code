@@ -1,4 +1,3 @@
-import { ensureLocalApi } from "../../localApi";
 import { UsageRequestPanel } from "./UsageRequestPanel";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
 import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
@@ -255,9 +254,7 @@ export function UsagePage() {
     if (nextMetric === "limits") setLimitsNow(Date.now());
     updatePreferences({ metric: nextMetric });
   };
-  const refreshLimits = async (automatic = false) => {
-    const confirmed = !automatic && (await ensureLocalApi().dialogs.confirm(gt("Refresh limits")));
-    if (!automatic && !confirmed) return;
+  const refreshLimits = (automatic = false) => {
     // Settled so the timestamp still advances when a refresh throws.
     return settlePromise(() =>
       Promise.all(
@@ -269,7 +266,7 @@ export function UsagePage() {
               () =>
                 refreshProviders({
                   environmentId,
-                  input: confirmed ? { antigravityUsageConfirmed: true } : {},
+                  input: !automatic ? { antigravityUsageConfirmed: true } : {},
                 }),
               automatic,
             );

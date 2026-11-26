@@ -166,7 +166,7 @@ T3 does not support Antigravity goal status, pause, resume, or clear commands.
 Open **Usage > Limits** to see the remaining Gemini and shared Claude/GPT allowances
 for Google sign-ins. Each group has separate five-hour and weekly limits and reset
 times. Allowance queries are off by default. In web or desktop, click **Refresh**
-and confirm to query once. Opening the page or model menu, sending messages,
+to query once. Opening the page or model menu, sending messages,
 provider status checks, and background timers do not query Antigravity allowances.
 The last reported timestamp stays visible until you explicitly refresh again.
 
