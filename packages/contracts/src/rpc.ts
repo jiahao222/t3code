@@ -699,6 +699,8 @@ const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
 
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
   payload: Schema.Struct({
+    /** One confirmed manual request; never sent by automatic status refreshes. */
+    antigravityUsageConfirmed: Schema.optional(Schema.Boolean),
     instanceId: Schema.optional(ProviderInstanceId),
     cwd: Schema.optional(TrimmedNonEmptyString),
     fresh: Schema.optional(Schema.Boolean),

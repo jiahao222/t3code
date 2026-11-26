@@ -1,3 +1,4 @@
+import { AntigravityUsageRefreshConfirmed } from "./antigravityUsagePolicy.ts";
 import { resolveProviderProbeTimeoutMs } from "@t3tools/provider-core/server/snapshotProbe";
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
@@ -238,7 +239,12 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
   const republish = yield* Deferred.make<Effect.Effect<ServerProvider>>();
   const scope = yield* Effect.scope;
   const refreshUsage = Effect.fn("AntigravityProvider.refreshUsage")(function* () {
-    if (!options.probeUsage || (yield* PublishingUsage)) return;
+    if (
+      !options.probeUsage ||
+      (yield* PublishingUsage) ||
+      !(yield* AntigravityUsageRefreshConfirmed)
+    )
+      return;
     yield* FiberHandle.run(
       usageRead,
       options.probeUsage.pipe(

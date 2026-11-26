@@ -1,3 +1,4 @@
+import { AntigravityUsageRefreshConfirmed } from "../provider/antigravityUsagePolicy.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe, expect, it } from "@effect/vitest";
@@ -498,6 +499,47 @@ describe("CLIProxyAPI built-in management API", () => {
     }),
   );
 
+  it.effect(
+    "does not call Antigravity upstream until confirmed and keeps the last manual reading",
+    () =>
+      Effect.gen(function* () {
+        const listed = [
+          {
+            id: "g.json",
+            auth_index: "g",
+            provider: "antigravity",
+            email: "g@example.com",
+            project_id: "project-7",
+            disabled: false,
+          },
+        ];
+        const test = fixture({
+          accounts: listed,
+          upstream: (request) => ({
+            status: 200,
+            body: request.url?.endsWith("/userinfo") ? { id: "google-42" } : antigravitySummary,
+          }),
+        });
+        const api = yield* test.api;
+        const [automatic] = yield* api.readAccounts(config);
+        expect(automatic?.usageLimits.unavailable?.reason).toBe("unsupported");
+        expect(test.requests).toHaveLength(1);
+        const manual = yield* api
+          .readAccounts(config)
+          .pipe(Effect.provideService(AntigravityUsageRefreshConfirmed, true));
+        expect(manual[0]?.usageLimits.windows[0]?.usedPercent).toBe(25);
+        expect(test.requests).toHaveLength(4);
+        expect(yield* api.readAccounts(config)).toEqual(manual);
+        expect(test.requests).toHaveLength(5);
+        listed[0]!.disabled = true;
+        expect(yield* api.readAccounts(config)).toEqual([]);
+        listed[0]!.disabled = false;
+        const [readded] = yield* api.readAccounts(config);
+        expect(readded?.usageLimits.unavailable?.reason).toBe("unsupported");
+        expect(test.requests.filter((request) => request.body)).toHaveLength(2);
+      }),
+  );
+
   it.effect("reads an Antigravity summary and keys the account by its Google ID", () =>
     Effect.gen(function* () {
       const test = fixture({
@@ -515,7 +557,9 @@ describe("CLIProxyAPI built-in management API", () => {
           body: request.url?.endsWith("/userinfo") ? { id: "google-42" } : antigravitySummary,
         }),
       });
-      const [account] = yield* (yield* test.api).readAccounts(config);
+      const [account] = yield* (yield* test.api)
+        .readAccounts(config)
+        .pipe(Effect.provideService(AntigravityUsageRefreshConfirmed, true));
       expect(account?.driver).toBe("antigravity");
       expect(account?.email).toBeUndefined();
       expect(account?.usageLimits.credentialFingerprint).toBe(
@@ -575,7 +619,9 @@ describe("CLIProxyAPI built-in management API", () => {
                 body: antigravitySummary,
               },
       });
-      const result = yield* (yield* test.api).readAccounts(config);
+      const result = yield* (yield* test.api)
+        .readAccounts(config)
+        .pipe(Effect.provideService(AntigravityUsageRefreshConfirmed, true));
       expect(result).toHaveLength(1);
       const [account] = result;
       expect(account).toMatchObject({ driver: "antigravity", email: "g@example.com" });
@@ -599,7 +645,9 @@ describe("CLIProxyAPI built-in management API", () => {
         accounts: [{ id: `${provider}.json`, auth_index: "a", provider, project_id: "project-7" }],
         upstream: () => ({ status, body }),
       });
-      const [account] = yield* (yield* test.api).readAccounts(config);
+      const [account] = yield* (yield* test.api)
+        .readAccounts(config)
+        .pipe(Effect.provideService(AntigravityUsageRefreshConfirmed, true));
       expect(account?.usageLimits.unavailable?.reason).toBe("probeFailed");
     }),
   );
@@ -618,7 +666,9 @@ describe("CLIProxyAPI built-in management API", () => {
             },
           ],
         });
-        const [account] = yield* (yield* test.api).readAccounts(config);
+        const [account] = yield* (yield* test.api)
+          .readAccounts(config)
+          .pipe(Effect.provideService(AntigravityUsageRefreshConfirmed, true));
         expect(account?.usageLimits.unavailable?.reason).toBe("probeFailed");
         expect(test.requests.map((request) => request.path)).toEqual(["/v0/management/auth-files"]);
       }),

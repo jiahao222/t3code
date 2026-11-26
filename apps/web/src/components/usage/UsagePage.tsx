@@ -1,3 +1,4 @@
+import { ensureLocalApi } from "../../localApi";
 import { UsageRequestPanel } from "./UsageRequestPanel";
 import { ChatGptUsageButton } from "../settings/ChatGptUsageButton";
 import { usesChatGptSharing } from "@t3tools/shared/usageLimits";
@@ -254,16 +255,22 @@ export function UsagePage() {
     if (nextMetric === "limits") setLimitsNow(Date.now());
     updatePreferences({ metric: nextMetric });
   };
-  const refreshLimits = (automatic = false) =>
+  const refreshLimits = async (automatic = false) => {
+    const confirmed = !automatic && (await ensureLocalApi().dialogs.confirm(gt("Refresh limits")));
+    if (!automatic && !confirmed) return;
     // Settled so the timestamp still advances when a refresh throws.
-    settlePromise(() =>
+    return settlePromise(() =>
       Promise.all(
         Array.from(presentations, ([environmentId, presentation]) => {
           if (selectedEnvironmentIds !== null && !selectedEnvironmentIds.has(environmentId)) return;
           if (presentation.connection.phase === "connected" && presentation.serverConfig !== null) {
             return refreshUsageLimits(
               environmentId,
-              () => refreshProviders({ environmentId, input: {} }),
+              () =>
+                refreshProviders({
+                  environmentId,
+                  input: confirmed ? { antigravityUsageConfirmed: true } : {},
+                }),
               automatic,
             );
           }
@@ -273,6 +280,7 @@ export function UsagePage() {
       setLimitsNow(Date.now());
       if (!AsyncResult.isSuccess(result)) throw Cause.squash(result.cause);
     });
+  };
   const onUsageKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (
       event.defaultPrevented ||

@@ -1,3 +1,4 @@
+import { AntigravityUsageRefreshConfirmed } from "./antigravityUsagePolicy.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
@@ -734,7 +735,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         );
         yield* harness.provider.snapshot.refresh;
         expect((yield* unsupported)?.usageLimits?.windows).toEqual([]);
-      }),
+      }).pipe(Effect.provideService(AntigravityUsageRefreshConfirmed, true)),
   );
 
   it.effect("a quota read finishing after sign-out cannot restore account limits", () =>
@@ -760,7 +761,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       });
       yield* Fiber.join(refresh);
       expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
-    }),
+    }).pipe(Effect.provideService(AntigravityUsageRefreshConfirmed, true)),
   );
 
   it.effect("reports ready and starts sessions while one shared quota read is pending", () =>
@@ -789,7 +790,7 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       } satisfies ServerProviderUsageLimits;
       yield* Deferred.succeed(readResult, limits);
       expect((yield* published)?.usageLimits).toEqual(limits);
-    }),
+    }).pipe(Effect.provideService(AntigravityUsageRefreshConfirmed, true)),
   );
 
   it.effect("a quota read for the previous account is dropped after a new sign-in", () =>
@@ -824,11 +825,44 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
       expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
       yield* harness.provider.onSessionStarted(started);
       expect((yield* republished)?.usageLimits).toEqual(failed);
-    }),
+    }).pipe(Effect.provideService(AntigravityUsageRefreshConfirmed, true)),
   );
 });
 
 it.layer(makeLayerTest(true))("Antigravity periodic health checks", (it) => {
+  it.effect(
+    "queries allowances only for a confirmed refresh, never startup, sessions or timers",
+    () =>
+      Effect.gen(function* () {
+        const reads = yield* Ref.make(0);
+        const limits = { checkedAt: "2026-11-26T04:00:00.000Z", windows: [] };
+        const harness = yield* makeHarness({
+          probeUsage: Ref.update(reads, (n) => n + 1).pipe(Effect.as(limits)),
+        });
+        yield* harness.initialize;
+        yield* harness.provider.onSessionStarted(started);
+        yield* harness.provider.snapshot.refresh;
+        yield* TestClock.adjust("15 minutes");
+        expect(yield* Ref.get(reads)).toBe(0);
+        const published = yield* harness.nextPublish(
+          (snapshot) => snapshot.usageLimits?.checkedAt === limits.checkedAt,
+        );
+        yield* harness.provider.snapshot.refresh.pipe(
+          Effect.provideService(AntigravityUsageRefreshConfirmed, true),
+        );
+        expect((yield* published)?.usageLimits).toEqual(limits);
+        expect(yield* Ref.get(reads)).toBe(1);
+        yield* harness.provider.snapshot.refresh;
+        yield* TestClock.adjust("15 minutes");
+        expect(yield* Ref.get(reads)).toBe(1);
+        expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toEqual(limits);
+        yield* harness.provider.onSignedIn;
+        yield* harness.provider.onSessionStarted(started);
+        expect(yield* Ref.get(reads)).toBe(1);
+        expect((yield* harness.provider.snapshot.getSnapshot).usageLimits).toBeUndefined();
+      }),
+  );
+
   it.effect("rechecks a ready provider after one failed periodic check before publishing it", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

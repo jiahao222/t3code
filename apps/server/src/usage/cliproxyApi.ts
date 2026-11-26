@@ -1,3 +1,4 @@
+import { AntigravityUsageRefreshConfirmed } from "../provider/antigravityUsagePolicy.ts";
 import {
   ProviderDriverKind,
   UsageLimitSourceError,
@@ -399,6 +400,7 @@ const HUB_PROVIDERS = new Map<string, HubProvider>([
 ]);
 
 export const makeCliproxyApi = Effect.gen(function* () {
+  const antigravityReadings = new Map<string, UsageLimitSourceAccount>();
   const client = yield* HttpClient.HttpClient;
   const digest = yield* Digest.Digest;
   const platform = yield* HostProcess.Platform;
@@ -494,12 +496,48 @@ export const makeCliproxyApi = Effect.gen(function* () {
           : new UsageLimitSourceError({ detail: "The hub could not list accounts." }),
       ),
     );
+    const confirmed = yield* AntigravityUsageRefreshConfirmed;
+    const hubKey = `${yield* encodeJson([hub.url, hub.managementKey]).pipe(Effect.orDie)}:`;
+    const keys = new Map(
+      yield* Effect.forEach(accounts, (account) =>
+        encodeJson([account.id, account.auth_index, account.email, account.project_id]).pipe(
+          Effect.orDie,
+          Effect.map((key) => [account, `${hubKey}${key}`] as const),
+        ),
+      ),
+    );
+    const activeKeys = new Set(
+      accounts.filter((account) => !account.disabled).map((account) => keys.get(account)!),
+    );
+    for (const key of antigravityReadings.keys()) {
+      if (key.startsWith(hubKey) && !activeKeys.has(key)) antigravityReadings.delete(key);
+    }
     return yield* Effect.forEach(
       accounts.flatMap((account) => {
         const provider = HUB_PROVIDERS.get(account.provider);
         return provider && !account.disabled ? [{ account, provider }] : [];
       }),
-      ({ account, provider }) => readAccount(hub, account, provider),
+      ({ account, provider }) =>
+        Effect.gen(function* () {
+          if (account.provider !== "antigravity") return yield* readAccount(hub, account, provider);
+          const key = keys.get(account)!;
+          if (!confirmed)
+            return (
+              antigravityReadings.get(key) ?? {
+                id: account.id,
+                driver: provider.driver,
+                ...listedIdentity(account),
+                usageLimits: makeUnavailableUsageLimits({
+                  checkedAt: DateTime.formatIso(yield* DateTime.now),
+                  reason: "unsupported",
+                  message: "Refresh limits manually to query Antigravity allowances.",
+                }),
+              }
+            );
+          const reading = yield* readAccount(hub, account, provider);
+          antigravityReadings.set(key, reading);
+          return reading;
+        }),
       { concurrency: 4 },
     );
   });

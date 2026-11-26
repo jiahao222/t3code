@@ -1,3 +1,4 @@
+import { AntigravityUsageRefreshConfirmed } from "./antigravityUsagePolicy.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Layer from "effect/Layer";
@@ -137,11 +138,27 @@ const fixture = Effect.fn("AntigravityUsageTest.fixture")(function* (
     authMethod: options.authMethod ?? "oauth-personal",
     ...(options.environment === undefined ? {} : { environment: options.environment }),
   }).pipe(Effect.provideService(HttpClient.HttpClient, http));
-  return { ...usage, requests, requestInits, writeToken, tokenPath };
+  return {
+    ...usage,
+    rawProbe: usage.probe,
+    probe: usage.probe.pipe(Effect.provideService(AntigravityUsageRefreshConfirmed, true)),
+    requests,
+    requestInits,
+    writeToken,
+    tokenPath,
+  };
 });
 
 describe("Antigravity subscription limits", () => {
   // Oracle: the 10:16 UTC payload and its narrow Workaround rule.
+  it.effect("does not refresh OAuth or read quota without a confirmed manual request", () =>
+    Effect.gen(function* () {
+      const { rawProbe, requests } = yield* fixture();
+      expect((yield* rawProbe).unavailable?.reason).toBe("unsupported");
+      expect(requests).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+  );
+
   it.effect("omits rolling resets for untouched summary buckets and keeps used Gemini resets", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(DateTime.toEpochMillis(DateTime.makeUnsafe("2026-10-21T10:16:04Z")));

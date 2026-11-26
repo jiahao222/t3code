@@ -1,3 +1,4 @@
+import { AntigravityUsageRefreshConfirmed } from "./antigravityUsagePolicy.ts";
 import type { AntigravitySettings, ServerProviderUsageWindow } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
@@ -255,6 +256,12 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   const read = Effect.gen(function* () {
     const startedGeneration = generation;
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    if (!(yield* AntigravityUsageRefreshConfirmed))
+      return makeUnavailableUsageLimits({
+        checkedAt,
+        reason: "unsupported",
+        message: "Refresh limits manually to query Antigravity allowances.",
+      });
     if (input.authMethod !== "oauth-personal" && input.authMethod !== "oauth-business") {
       return makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
     }

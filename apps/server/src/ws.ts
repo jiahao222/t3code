@@ -1,3 +1,4 @@
+import { AntigravityUsageRefreshConfirmed } from "./provider/antigravityUsagePolicy.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- A synchronous digest inside the pure provider mapping.
 import * as NodeCrypto from "node:crypto";
@@ -2478,101 +2479,113 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.serverRefreshProviders]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
-          Effect.fnUntraced(function* (input) {
-            if (input.modelCatalogOnly === true) {
-              yield* providerRegistry.refreshModelCatalog;
-              return { providers: [] };
-            }
-            if (input.refreshModels) {
-              yield* providerRegistry.invalidateModelCaches({
-                instanceId: input.instanceId,
-                cwd: input.cwd,
-                fresh: input.fresh,
-              });
-            }
-            if (input.reloadSecrets === true && input.instanceId === undefined) {
-              yield* invalidateSettingsSecrets(secretResolver, serverSettings.getSettings);
-            }
-            // Await refresh; RPC scope closure would interrupt a fork before the hub answered.
-            if (input.instanceId === undefined) {
-              yield* usageLimitSources.refresh;
-            }
-            let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
-              ? providerRegistry.refreshWorkspaceSnapshot({
+          Effect.fnUntraced(
+            function* (input) {
+              if (input.modelCatalogOnly === true) {
+                yield* providerRegistry.refreshModelCatalog;
+                return { providers: [] };
+              }
+              if (input.refreshModels) {
+                yield* providerRegistry.invalidateModelCaches({
                   instanceId: input.instanceId,
                   cwd: input.cwd,
-                  scanCwd: yield* projectService.workspaceScanDirectory(input.cwd),
-                  fresh: input.fresh === true,
-                })
-              : input.reloadSecrets === true
-                ? providerRegistry.reloadSecretsAndRefresh(input.instanceId)
-                : input.instanceId !== undefined
-                  ? providerRegistry.refreshInstance(input.instanceId)
-                  : providerRegistry.refresh();
-            if (input.refreshModels) {
-              const instances = yield* providerInstances.listInstances;
-              for (const instance of instances) {
-                if (
-                  !instance.refreshModels ||
-                  (input.instanceId !== undefined && input.instanceId !== instance.instanceId) ||
-                  !providers.some(
-                    (provider) =>
-                      provider.instanceId === instance.instanceId &&
-                      provider.enabled &&
-                      provider.installed,
-                  )
-                )
-                  continue;
-                yield* instance.refreshModels().pipe(
-                  Effect.mapError(
-                    (error) =>
-                      new ProviderSetupError({
-                        instanceId: instance.instanceId,
-                        operation: "refresh-models",
-                        detail: error.detail,
-                      }),
-                  ),
-                );
-                providers = yield* providerRegistry.refreshInstance(instance.instanceId);
+                  fresh: input.fresh,
+                });
               }
-            }
-            const { instanceId, cwd } = input;
-            if (input.omitProviders === true && (instanceId === undefined || cwd === undefined)) {
-              return { providers: [] };
-            }
-            if (input.workspaceSnapshotsOnDemand !== true) return { providers };
-            const commandProviders =
-              input.usageLimitsCommand === true
-                ? withUsageLimitsCommands(providers, yield* usageLimitSources.current)
-                : providers;
-            if (instanceId === undefined || cwd === undefined) {
-              return { providers: withoutWorkspaceSnapshots(commandProviders) };
-            }
-            const catalogOnDemand =
-              input.providerCatalogsOnDemand === true &&
-              (yield* providerInstances.getInstance(instanceId))?.snapshotForCwd !== undefined;
-            return {
-              providers: commandProviders
-                .filter((provider) => provider.instanceId === instanceId)
-                .map((provider) => {
-                  const catalog =
-                    catalogOnDemand && input.machineCatalog === true
-                      ? machineCatalogNames(provider)
-                      : undefined;
-                  return {
-                    ...provider,
-                    // Callers read only the cwd snapshot; the config stream carries the rest.
-                    models: [],
-                    slashCommands: catalog?.slashCommands ?? [],
-                    skills: catalog?.skills ?? [],
-                    ...(catalog === undefined
-                      ? {}
-                      : { catalogDigest: machineCatalogDigest(provider) }),
-                    workspaceSnapshots: workspaceSnapshotOrCatalog(provider, cwd, catalogOnDemand),
-                  };
-                }),
-            };
-          }),
+              if (input.reloadSecrets === true && input.instanceId === undefined) {
+                yield* invalidateSettingsSecrets(secretResolver, serverSettings.getSettings);
+              }
+              // Await refresh; RPC scope closure would interrupt a fork before the hub answered.
+              if (input.instanceId === undefined) {
+                yield* usageLimitSources.refresh;
+              }
+              let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
+                ? providerRegistry.refreshWorkspaceSnapshot({
+                    instanceId: input.instanceId,
+                    cwd: input.cwd,
+                    scanCwd: yield* projectService.workspaceScanDirectory(input.cwd),
+                    fresh: input.fresh === true,
+                  })
+                : input.reloadSecrets === true
+                  ? providerRegistry.reloadSecretsAndRefresh(input.instanceId)
+                  : input.instanceId !== undefined
+                    ? providerRegistry.refreshInstance(input.instanceId)
+                    : providerRegistry.refresh();
+              if (input.refreshModels) {
+                const instances = yield* providerInstances.listInstances;
+                for (const instance of instances) {
+                  if (
+                    !instance.refreshModels ||
+                    (input.instanceId !== undefined && input.instanceId !== instance.instanceId) ||
+                    !providers.some(
+                      (provider) =>
+                        provider.instanceId === instance.instanceId &&
+                        provider.enabled &&
+                        provider.installed,
+                    )
+                  )
+                    continue;
+                  yield* instance.refreshModels().pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new ProviderSetupError({
+                          instanceId: instance.instanceId,
+                          operation: "refresh-models",
+                          detail: error.detail,
+                        }),
+                    ),
+                  );
+                  providers = yield* providerRegistry.refreshInstance(instance.instanceId);
+                }
+              }
+              const { instanceId, cwd } = input;
+              if (input.omitProviders === true && (instanceId === undefined || cwd === undefined)) {
+                return { providers: [] };
+              }
+              if (input.workspaceSnapshotsOnDemand !== true) return { providers };
+              const commandProviders =
+                input.usageLimitsCommand === true
+                  ? withUsageLimitsCommands(providers, yield* usageLimitSources.current)
+                  : providers;
+              if (instanceId === undefined || cwd === undefined) {
+                return { providers: withoutWorkspaceSnapshots(commandProviders) };
+              }
+              const catalogOnDemand =
+                input.providerCatalogsOnDemand === true &&
+                (yield* providerInstances.getInstance(instanceId))?.snapshotForCwd !== undefined;
+              return {
+                providers: commandProviders
+                  .filter((provider) => provider.instanceId === instanceId)
+                  .map((provider) => {
+                    const catalog =
+                      catalogOnDemand && input.machineCatalog === true
+                        ? machineCatalogNames(provider)
+                        : undefined;
+                    return {
+                      ...provider,
+                      // Callers read only the cwd snapshot; the config stream carries the rest.
+                      models: [],
+                      slashCommands: catalog?.slashCommands ?? [],
+                      skills: catalog?.skills ?? [],
+                      ...(catalog === undefined
+                        ? {}
+                        : { catalogDigest: machineCatalogDigest(provider) }),
+                      workspaceSnapshots: workspaceSnapshotOrCatalog(
+                        provider,
+                        cwd,
+                        catalogOnDemand,
+                      ),
+                    };
+                  }),
+              };
+            },
+            (effect, input) =>
+              Effect.provideService(
+                effect,
+                AntigravityUsageRefreshConfirmed,
+                input.antigravityUsageConfirmed === true,
+              ),
+          ),
         [WS_METHODS.mcpAppsCallTool]: (input) => mcpAppRequests.callTool(input),
         [WS_METHODS.mcpAppsToolInfo]: (input) => mcpAppRequests.toolInfo(input),
         [WS_METHODS.mcpAppsUpdateModelContext]: (input) => mcpAppRequests.updateModelContext(input),
