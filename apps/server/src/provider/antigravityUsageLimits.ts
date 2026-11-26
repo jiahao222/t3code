@@ -231,10 +231,11 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
       );
     }
   }
+  // The dispatcher is paired with its own Undici fetch below, rather than Node's bundled version.
   const requestInit: RequestInit =
     proxyDispatcher === undefined
       ? MANUAL_REDIRECT
-      : ({ ...MANUAL_REDIRECT, dispatcher: proxyDispatcher.dispatcher } as RequestInit);
+      : ({ ...MANUAL_REDIRECT, dispatcher: proxyDispatcher.dispatcher } as unknown as RequestInit);
   let cached:
     | { fingerprint: string; account: string; accessToken: string; expiresAt: number }
     | undefined;
